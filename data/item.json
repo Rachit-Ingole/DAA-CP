@@ -1,0 +1,25 @@
+{
+  "red potion": {
+    "heal": 10,
+    "desc": "Health potion \n \n Heal for 10 hp"
+  },
+  "blue potion": {
+    "heal": 5,
+    "desc": "Mana potion \n \n Heal for 5 mp"
+  },
+  "teleport scroll": {
+    "desc": "Teleport Scroll \n \n Teleports user"
+  },
+  "sword": {
+    "desc": "Sword \n \n A weak sword"
+  },
+  "shield": {
+    "desc": "Shield \n \n A weak shield"
+  },
+  "armor": {
+    "desc": "Armor \n \n A weak armor"
+  },
+  "chest": {
+    "desc": "Chest \n \n Full of treasure"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "sword": {
+    "strength_bonus": 2,
+    "defense_bonus": 0,
+    "wizardry_bonus": 0,
+    "hp_bonus": 0,
+    "mp_bonus": 0,
+    "slot": "Left hand"
+  },
+  "shield": {
+    "strength_bonus": 0,
+    "defense_bonus": 1,
+    "wizardry_bonus": 0,
+    "hp_bonus": 0,
+    "mp_bonus": 0,
+    "slot": "Right hand"
+  },
+  "armor": {
+    "strength_bonus": 0,
+    "defense_bonus": 2,
+    "wizardry_bonus": 0,
+    "hp_bonus": 0,
+    "mp_bonus": 0,
+    "slot": "Armor"
+  }
+}
