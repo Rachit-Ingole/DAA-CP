@@ -1,3 +1,19 @@
+"""
+================================================================================
+NOTE FOR DAA (CS3101) CODE PRESENTATION & EVALUATION:
+================================================================================
+This file (map_generator.py) contains legacy Binary Space Partitioning (BSP) code.
+
+The primary Procedural Dungeon Generation algorithms implemented for the
+CS3101 Design and Analysis of Algorithms project are modularized in:
+    >>> src/algorithms/dungeon_generator.py <<<
+
+Key algorithms located in src/algorithms/dungeon_generator.py:
+  1. Kruskal's Minimum Spanning Tree (MST) + Disjoint Set Union (DSU)
+  2. Recursive Backtracking (Depth-First Maze Carving)
+================================================================================
+"""
+
 import gamemap
 import random
 from constant import *

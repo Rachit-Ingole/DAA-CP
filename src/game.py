@@ -12,6 +12,7 @@ import menu
 import buttonmanager
 import game_data
 import entity_generator
+import game_text
 
 pygame.font.init()
 
