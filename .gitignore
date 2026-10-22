@@ -13,3 +13,10 @@ Thumbs.db
 
 # Local save files if needed
 save.txt
+
+# C++ Build artifacts
+cpp/build/
+*.exe
+*.dll
+*.o
+*.a
