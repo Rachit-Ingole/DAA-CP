@@ -109,15 +109,34 @@ class Graph:
                     visiting.put(self.nodes[next])
                     visited[next] = (node.x, node.y)
 
+        # Terrain-weighted cost of the BFS path (BFS itself ignores weights)
+        cost = 0.0
+        if goal in visited:
+            cur = goal
+            while visited[cur] is not None:
+                prev = visited[cur]
+                cost += self.nodes[prev].edges[cur]
+                cur = prev
         t1 = time.perf_counter()
         self.last_nodes_visited = nodes_visited
         self.last_time_ms = (t1 - t0) * 1000.0
         self.last_explored = visited
+        self.last_cost = cost
         return visited
 
-    def dijkstra(self, start, goal):
+    @staticmethod
+    def _step_cost(node, nxt, ignore_terrain):
+        """Edge weight, or the plain distance (1 / sqrt 2) for creatures that fly over mud."""
+        if ignore_terrain:
+            return 1.41421356 if (node.x != nxt[0] and node.y != nxt[1]) else 1.0
+        return node.edges[nxt]
+
+    def dijkstra(self, start, goal, ignore_terrain=False):
         """
         Dijkstra's shortest path traversal of graph supporting terrain costs.
+
+        Args:
+            ignore_terrain (bool): treat mud like floor (flying creatures)
         """
         import time
         t0 = time.perf_counter()
@@ -140,7 +159,7 @@ class Graph:
                 break
 
             for next in node.edges:
-                new_cost = current_cost[(node.x, node.y)] + node.edges[next]
+                new_cost = current_cost[(node.x, node.y)] + self._step_cost(node, next, ignore_terrain)
                 if next not in current_cost or new_cost < current_cost[next]:
                     current_cost[next] = new_cost
                     visiting.put(PrioritizedItem(new_cost, self.nodes[next]))
@@ -191,6 +210,53 @@ class Graph:
         self.last_explored = visited
         if goal in current_cost:
             self.last_cost = current_cost[goal]
+        return visited
+
+    def greedy_best_first(self, start, goal):
+        """
+        Greedy Best-First Search: expands whichever open node *looks* closest
+        to the goal (priority = h(n) only, no g(n)). Explores very few nodes
+        but the path is not guaranteed to be the cheapest: it ignores mud
+        cost and can commit to a detour around pillars.
+        """
+        import time
+        t0 = time.perf_counter()
+        self.last_algorithm = "Greedy"
+        if (goal not in self.nodes) or (start not in self.nodes):
+            return None
+        visiting = queue.PriorityQueue()
+        visiting.put(PrioritizedItem(distance(start, goal), self.nodes[start]))
+        visited = {start: None}
+        closed = set()
+        nodes_visited = 0
+
+        while not visiting.empty():
+            node = visiting.get().item
+            here = (node.x, node.y)
+            if here in closed:
+                continue
+            closed.add(here)
+            nodes_visited += 1
+            if here == goal:
+                break
+            for next in node.edges:
+                if next not in visited:
+                    visited[next] = here
+                    visiting.put(PrioritizedItem(distance(next, goal), self.nodes[next]))
+
+        # Real (terrain-weighted) cost of the path it settled on
+        cost = 0.0
+        if goal in visited:
+            cur = goal
+            while visited[cur] is not None:
+                prev = visited[cur]
+                cost += self.nodes[prev].edges[cur]
+                cur = prev
+        t1 = time.perf_counter()
+        self.last_nodes_visited = nodes_visited
+        self.last_time_ms = (t1 - t0) * 1000.0
+        self.last_explored = visited
+        self.last_cost = cost
         return visited
 
     def find_path(self, start, goal, visited):

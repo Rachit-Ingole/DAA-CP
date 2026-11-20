@@ -207,6 +207,9 @@ def draw_game():
 
     draw_game_objects()
 
+    if getattr(config, 'DEV_OBSERVATION_MODE', False):
+        draw_algorithm_tags()
+
     draw_particles()
 
     _draw_level_fade()
@@ -572,8 +575,11 @@ def _hover_label_text(tile_x, tile_y):
     show_all = getattr(config, 'DEV_OBSERVATION_MODE', False) or getattr(config, 'WALL_HACK', False)
     for enemy in config.GAME_DATA.creature_data["enemy"]:
         if (enemy.x, enemy.y) == (tile_x, tile_y) and (show_all or fov.check_if_in_fov(enemy, config.FOV)):
+            import ai
             stat = enemy.creature.stat
-            return f"{enemy.creature.name_instance.title()}  Lv {stat.level}  HP {max(0, stat.hp)}/{stat.max_hp}", (255, 150, 140)
+            algo = ai.algorithm_for(enemy.creature.name_instance)
+            return (f"{enemy.creature.name_instance.title()}  Lv {stat.level}  HP {max(0, stat.hp)}/{stat.max_hp}"
+                    f"  - hunts with {algo}"), (255, 150, 140)
     tile = config.MAP_INFO.tile_array[tile_y][tile_x]
     if tile.seen:
         for item_entity in config.GAME_DATA.item_data:
@@ -688,19 +694,52 @@ def draw_algorithm_grid_overlay():
             if x0 <= nx < x1 and y0 <= ny < y1:
                 config.SURFACE_MAIN.blit(explored_surf, cam.world_to_screen(nx, ny))
 
-    # 2. Path nodes
-    path = getattr(config.PATHFINDING, 'last_path', None)
-    if path:
-        half = SPRITE_SIZE // 2
-        points = []
+    # 2. Every hunting enemy's planned path, in its algorithm's colour
+    half = SPRITE_SIZE // 2
+    for enemy in config.GAME_DATA.creature_data["enemy"]:
+        info = getattr(enemy, "path_info", None)
+        if not info or type(enemy.ai).__name__ != "ChaseAI":
+            continue
+        colour = ALGORITHM_COLOURS.get(info["algo"], (255, 215, 0))
+        path = info["path"]
+        if (enemy.x, enemy.y) in path:
+            path = path[path.index((enemy.x, enemy.y)) + 1:]
+        rx, ry = enemy.render_pos()
+        sx, sy = cam.world_to_screen(rx, ry)
+        points = [(sx + half, sy + half)]
         for (px, py) in path:
-            sx, sy = cam.world_to_screen(px, py)
-            points.append((sx + half, sy + half))
+            tx, ty = cam.world_to_screen(px, py)
+            points.append((tx + half, ty + half))
         if len(points) > 1:
-            pygame.draw.lines(config.SURFACE_MAIN, (255, 215, 0), False, points, 3)
-        for point in points:
-            pygame.draw.circle(config.SURFACE_MAIN, (255, 215, 0), point, 5)
-            pygame.draw.circle(config.SURFACE_MAIN, (90, 60, 0), point, 5, 1)
+            pygame.draw.lines(config.SURFACE_MAIN, (0, 0, 0), False, points, 5)
+            pygame.draw.lines(config.SURFACE_MAIN, colour, False, points, 3)
+        for point in points[1:]:
+            pygame.draw.circle(config.SURFACE_MAIN, colour, point, 4)
+
+
+def draw_algorithm_tags():
+    """Small label above each enemy naming the search algorithm it hunts with."""
+    import ai
+    cam = config.CAMERA
+    for enemy in config.GAME_DATA.creature_data["enemy"]:
+        if not enemy.creature:
+            continue
+        algo = ai.algorithm_for(enemy.creature.name_instance)
+        info = getattr(enemy, "path_info", None)
+        text = algo if not info else f"{algo}  {info['nodes']} nodes"
+        colour = ALGORITHM_COLOURS.get(algo, WHITE)
+        label = game_text.render_cached(FONT_HUD_SMALL, text, True, colour)
+        rx, ry = enemy.render_pos()
+        sx, sy = cam.world_to_screen(rx, ry)
+        bx, by = sx + SPRITE_SIZE // 2 - label.get_width() // 2, sy - 14
+        key = ("tag_box", label.get_width(), label.get_height())
+        box = _surfaces.get(key)
+        if box is None:
+            box = pygame.Surface((label.get_width() + 6, label.get_height()), pygame.SRCALPHA)
+            box.fill((0, 0, 0, 170))
+            _surfaces[key] = box
+        config.SURFACE_MAIN.blit(box, (bx - 3, by))
+        config.SURFACE_MAIN.blit(label, (bx, by))
 
 
 def draw_algorithm_telemetry():
@@ -720,28 +759,38 @@ def draw_algorithm_telemetry():
     is_valid = "PASS" if (floor_data and floor_data.is_valid) else "OK"
     exit_dist = getattr(floor_data, 'exit_distance', 0) or "N/A"
 
-    # Pathfinding stats
-    active_algo = getattr(config, 'ACTIVE_PATHFINDING_ALGO', 'A*')
-    pf = config.PATHFINDING
-    nodes_vis = getattr(pf, 'last_nodes_visited', 0)
-    pf_time = getattr(pf, 'last_time_ms', 0.0)
-    path_len = len(getattr(pf, 'last_path', []))
-    path_cost = getattr(pf, 'last_cost', 0.0)
-
+    # Pathfinding: which algorithm each enemy type uses + running averages
+    mode = getattr(config, 'ACTIVE_PATHFINDING_ALGO', 'Per-type')
+    small = FONT_HUD_SMALL
     lines = [
-        (f"=== DAA ALGORITHM OBSERVATION ===   FPS {int(config.CLOCK.get_fps())}", YELLOW),
-        (f"Floor: {floor_num} (Infinite) | Gen: {gen_type} | Seed: {getattr(config, 'BASE_SEED', '-')}", WHITE),
-        (f"Gen Time: {gen_time} | Cov: {coverage} | DeadEnds: {dead_ends} | Exit: {exit_dist} steps", LIGHT_GREY),
-        (f"Validation: {is_valid} (Reachability & MST Validated)", GREEN if is_valid == "PASS" else WHITE),
-        (f"Pathfinding Algo: {active_algo} | Cost: {path_cost:.1f}", CYAN),
-        (f"Explored: {nodes_vis} nodes | Time: {pf_time:.2f}ms | Len: {path_len}", WHITE),
-        ("[F1] HUD  [O] Path  [G] Gen  [B] Gen Replay  [K] Loot Plan  [U] Runes", YELLOW)
+        (f"=== DAA ALGORITHM OBSERVATION ===   FPS {int(config.CLOCK.get_fps())}", YELLOW, font),
+        (f"Floor: {floor_num} (Infinite) | Gen: {gen_type} | Seed: {getattr(config, 'BASE_SEED', '-')}", WHITE, font),
+        (f"Gen Time: {gen_time} | Cov: {coverage} | DeadEnds: {dead_ends} | Exit: {exit_dist} steps", LIGHT_GREY, font),
+        (f"Validation: {is_valid} (Reachability & MST Validated)", GREEN if is_valid == "PASS" else WHITE, font),
+        (f"Enemy pathfinding [O]: {mode}", CYAN, font),
     ]
-    rendered = [game_text.render_cached(font, text, True, color) for text, color in lines]
+    stats = getattr(config, 'PATH_STATS', {})
+    for algo in ("A*", "Dijkstra", "BFS", "Greedy"):
+        if mode == "Per-type":
+            users = [name for name, a in ENEMY_ALGORITHMS.items() if a == algo]
+        else:
+            users = ["all enemies"] if mode == algo else []
+        st = stats.get(algo)
+        if not users and not st:
+            continue
+        who = ", ".join(users) if users else "-"
+        if st and st["calls"]:
+            n = st["calls"]
+            text = (f"{algo} ({who}):  avg {st['nodes'] / n:.1f} nodes,  {st['time_ms'] / n:.2f} ms,"
+                    f"  cost {st['cost'] / n:.1f}   [{n} searches]")
+        else:
+            text = f"{algo} ({who}):  not hunting yet"
+        lines.append((text, ALGORITHM_COLOURS[algo], small))
+    lines.append(("[F1] HUD  [O] Path  [G] Gen  [B] Gen Replay  [K] Loot Plan  [U] Runes", YELLOW, font))
+    rendered = [(game_text.render_cached(f, text, True, color), f) for text, color, f in lines]
 
-    line_h = 23
-    panel_w = max(r.get_width() for r in rendered) + 24
-    panel_h = len(rendered) * line_h + 14
+    panel_w = max(r.get_width() for r, _ in rendered) + 24
+    panel_h = sum(f.get_linesize() + 3 for _, f in rendered) + 14
     panel_x = config.CAMERA.camera_width - panel_w - 10
     panel_y = 10
 
@@ -755,9 +804,9 @@ def draw_algorithm_telemetry():
     config.SURFACE_MAIN.blit(hud_surf, (panel_x, panel_y))
 
     line_y = panel_y + 8
-    for r in rendered:
+    for r, f in rendered:
         config.SURFACE_MAIN.blit(r, (panel_x + 12, line_y))
-        line_y += line_h
+        line_y += f.get_linesize() + 3
 
 
 # ============================================================================

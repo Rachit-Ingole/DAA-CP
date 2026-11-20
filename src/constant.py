@@ -136,6 +136,27 @@ CARRY_PER_STRENGTH = 2
 # Extra turns every step costs while carrying more than the capacity
 ENCUMBERED_EXTRA_TURNS = 1
 
+# ENEMY PATHFINDING
+# Every enemy type hunts with a different search algorithm (press O in game to
+# force one algorithm on every enemy instead, for side-by-side comparison)
+ENEMY_ALGORITHMS = {
+    "slime": "BFS",               # unweighted: wades straight through mud and gets stuck
+    "goblin": "Greedy",           # greedy best-first: fast, follows its nose, not optimal
+    "skeleton": "A*",             # optimal and focused (heuristic guides the search)
+    "flying creature": "Dijkstra",  # optimal, flies over mud (all tiles cost the same)
+}
+PATHFINDING_MODES = ["Per-type", "A*", "Dijkstra", "BFS", "Greedy"]
+# Colour used for each algorithm's path in the F1 overlay / labels
+ALGORITHM_COLOURS = {
+    "A*": (255, 215, 0),
+    "Dijkstra": (80, 200, 255),
+    "BFS": (120, 235, 120),
+    "Greedy": (255, 105, 200),
+}
+# Once an enemy spots the player it keeps hunting for this many turns after
+# losing sight of them (so the path it plans actually matters)
+AGGRO_TURNS = 6
+
 # RAYCASTING
 RAYS = 360
 STEP = 3

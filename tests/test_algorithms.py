@@ -26,6 +26,7 @@ from algorithms.pathfinding_algorithms import (
     bfs_path,
     dijkstra_path,
     astar_path,
+    greedy_best_first_path,
     heuristic_octile,
     heuristic_chebyshev,
     heuristic_manhattan,
@@ -170,6 +171,38 @@ class TestPathfindingAlgorithms(unittest.TestCase):
                     f"Heuristic {h_val} exceeds true cost {true_cost} between {p1} and {p2}")
 
 
+    def test_greedy_best_first_valid_path(self):
+        start, goal = (1, 1), (3, 3)
+        res = greedy_best_first_path(self.weighted_grid, start, goal, diagonal=True)
+        astar = astar_path(self.weighted_grid, start, goal, diagonal=True)
+        self.assertTrue(res.success)
+        self.assertEqual(res.path[0], start)
+        self.assertEqual(res.path[-1], goal)
+        # Every step is to an adjacent walkable tile
+        for (ax, ay), (bx, by) in zip(res.path, res.path[1:]):
+            self.assertLessEqual(max(abs(ax - bx), abs(ay - by)), 1)
+            self.assertNotEqual(self.weighted_grid[by][bx], '1')
+        # Never cheaper than the optimum
+        self.assertGreaterEqual(res.path_cost + 1e-9, astar.path_cost)
+
+    def test_greedy_best_first_is_not_optimal(self):
+        """Greedy follows the heuristic straight through expensive mud; Dijkstra detours."""
+        costs = {'.': 1.0, '0': 1.0, 'M': 10.0}
+        start, goal = (1, 1), (3, 1)
+        greedy = greedy_best_first_path(self.weighted_grid, start, goal, terrain_costs=costs, diagonal=False)
+        optimal = dijkstra_path(self.weighted_grid, start, goal, terrain_costs=costs, diagonal=False)
+        self.assertIn((2, 1), greedy.path)               # walked through the mud
+        self.assertAlmostEqual(greedy.path_cost, 11.0)    # 10 (mud) + 1
+        self.assertAlmostEqual(optimal.path_cost, 6.0)    # 6-step detour
+        self.assertGreater(greedy.path_cost, optimal.path_cost)
+
+    def test_greedy_explores_fewer_nodes_than_dijkstra(self):
+        grid = [['.' for _ in range(15)] for _ in range(15)]
+        greedy = greedy_best_first_path(grid, (0, 0), (14, 14))
+        dijkstra = dijkstra_path(grid, (0, 0), (14, 14))
+        self.assertLess(greedy.nodes_visited, dijkstra.nodes_visited)
+
+
 class TestDungeonGeneration(unittest.TestCase):
     def test_recursive_backtracking_valid(self):
         floor = generate_recursive_backtracking(width=25, height=25, seed=42)
@@ -194,6 +227,34 @@ class TestDungeonGeneration(unittest.TestCase):
         # Different seed must produce different layout
         floor3 = generate_rooms_mst(width=25, height=25, seed=99999)
         self.assertNotEqual(floor1.grid, floor3.grid)
+
+
+    def test_double_sweep_exit_is_farthest_room(self):
+        """The exit must be the room centre with the largest BFS distance from the spawn."""
+        from algorithms.dungeon_generator import _bfs_distances
+        for seed in range(1, 21):
+            floor = generate_rooms_mst(width=35, height=35, seed=seed)
+            dist = _bfs_distances(floor.grid, floor.spawn_pos)
+            farthest = max(dist.get(r.center, -1) for r in floor.rooms)
+            self.assertEqual(dist[floor.exit_pos], farthest)
+            self.assertEqual(floor.exit_distance, farthest)
+
+    def test_trace_does_not_change_generation(self):
+        for gen in (generate_rooms_mst, generate_recursive_backtracking):
+            plain = gen(width=35, height=35, seed=77)
+            traced = gen(width=35, height=35, seed=77, trace=True)
+            self.assertEqual(plain.grid, traced.grid)
+            self.assertIsNone(plain.trace)
+            final = [e for e in traced.trace if e[0] == "final"][0][1]
+            self.assertEqual(final, traced.grid)
+
+    def test_kruskal_trace_builds_spanning_tree(self):
+        floor = generate_rooms_mst(width=35, height=35, seed=5, trace=True)
+        accepted = [e for e in floor.trace if e[0] == "edge" and e[4]]
+        self.assertEqual(len(accepted), len(floor.rooms) - 1)   # |V| - 1 edges
+        self.assertEqual(accepted[-1][5], 1)                     # ends with 1 component
+        weights = [e[3] for e in floor.trace if e[0] == "edge"]
+        self.assertEqual(weights, sorted(weights))               # considered in sorted order
 
 
 class TestKnapsackOptimization(unittest.TestCase):
@@ -234,6 +295,16 @@ class TestKnapsackOptimization(unittest.TestCase):
         self.assertEqual(comp["greedy_value"], 160)
         self.assertGreater(comp["dp_value"], comp["greedy_value"])
         self.assertAlmostEqual(comp["greedy_competitive_ratio"], 160 / 220, places=3)
+
+
+    def test_dp_trace_matches_selection(self):
+        items = [KnapsackItem(f"I{i}", w, v) for i, (w, v) in
+                 enumerate([(3, 10), (4, 13), (2, 7), (5, 14), (1, 2), (6, 20)])]
+        res = solve_knapsack_dp(items, capacity=10)
+        taken = [items[i - 1] for i, w, took in res.trace if took]
+        self.assertEqual(sorted(it.name for it in taken), sorted(it.name for it in res.selected_items))
+        self.assertEqual(res.dp_table[len(items)][10], res.total_value)
+        self.assertLessEqual(res.total_weight, 10)
 
 
 class TestBacktrackingPuzzle(unittest.TestCase):

@@ -501,11 +501,17 @@ def _handle_keyboard_event(event):
 
     # CS3101: Cycle Enemy Pathfinding Algorithm
     elif event.key == pygame.K_o:
-        algos = ["A*", "Dijkstra", "BFS"]
-        curr = getattr(config, 'ACTIVE_PATHFINDING_ALGO', 'A*')
-        idx = algos.index(curr) if curr in algos else 0
-        config.ACTIVE_PATHFINDING_ALGO = algos[(idx + 1) % len(algos)]
-        game_text.add_game_message_to_print(f"Enemy Pathfinding: {config.ACTIVE_PATHFINDING_ALGO}", CYAN)
+        modes = PATHFINDING_MODES
+        curr = getattr(config, 'ACTIVE_PATHFINDING_ALGO', 'Per-type')
+        idx = modes.index(curr) if curr in modes else 0
+        config.ACTIVE_PATHFINDING_ALGO = modes[(idx + 1) % len(modes)]
+        if config.ACTIVE_PATHFINDING_ALGO == "Per-type":
+            game_text.add_game_message_to_print(
+                "Enemy pathfinding: each type uses its own algorithm "
+                "(slime BFS, goblin Greedy, skeleton A*, flyer Dijkstra)", CYAN)
+        else:
+            game_text.add_game_message_to_print(
+                f"Enemy pathfinding: ALL enemies use {config.ACTIVE_PATHFINDING_ALGO}", CYAN)
 
     # CS3101: Cycle Dungeon Generation Algorithm
     elif event.key == pygame.K_g:

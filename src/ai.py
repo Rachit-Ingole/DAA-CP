@@ -148,62 +148,97 @@ class ConfuseAI:
         self.turn_count -= 1
 
 
+def algorithm_for(creature_name):
+    """
+    Returns:
+        the pathfinding algorithm a creature uses: its own one from
+        ENEMY_ALGORITHMS, unless one algorithm is forced on everyone (O key)
+    """
+    mode = getattr(config, 'ACTIVE_PATHFINDING_ALGO', 'Per-type')
+    if mode in ("A*", "Dijkstra", "BFS", "Greedy"):
+        return mode
+    return ENEMY_ALGORITHMS.get(creature_name, "A*")
+
+
+def _record_stats(algo, graph):
+    stats = config.PATH_STATS.setdefault(algo, {"calls": 0, "nodes": 0, "time_ms": 0.0, "cost": 0.0})
+    stats["calls"] += 1
+    stats["nodes"] += graph.last_nodes_visited
+    stats["time_ms"] += graph.last_time_ms
+    stats["cost"] += graph.last_cost
+
+
 class ChaseAI:
     """
-    Once per turn check if player in fov and so
-    chase player, else wander
+    Once per turn: if the player is within sight (or was seen in the last
+    AGGRO_TURNS turns) plan a path to them with this creature's own search
+    algorithm and take one step along it, else wander.
 
     Attributes:
         owner (Entity): owner of ai
+        aggro (int): turns left to keep hunting after losing sight of the player
     """
 
     def __init__(self):
         self.owner = None
+        self.aggro = 0
 
     def take_turn(self):
-        """
-        Make creature move towards the player if in creature FOV,
-        else wander
-        """
         creature = self.owner.creature
         player = config.PLAYER
         diff_x = creature.x - player.x
         diff_y = creature.y - player.y
 
-        # If player is not in enemy FOV wander
-        if abs(diff_x) > PLAYER_FOV or abs(diff_y) > PLAYER_FOV:
-            _wander(creature)
+        if abs(diff_x) <= PLAYER_FOV and abs(diff_y) <= PLAYER_FOV:
+            self.aggro = AGGRO_TURNS
+        elif getattr(self, "aggro", 0) > 0:
+            self.aggro -= 1
         else:
-            self._make_path_to_player(creature, player)
+            self.owner.path_info = None
+            _wander(creature)
+            return
 
-            if creature.current_path:
-                dest = creature.current_path.pop(0)
-                blocker = _creature_at(dest[0], dest[1], self.owner)
-                if blocker is not None and blocker.creature and blocker.creature.team == creature.team:
-                    # An ally is standing on the next tile of the shortest path
-                    _sidestep_towards(creature, (player.x, player.y))
-                else:
-                    creature.move(dest[0] - creature.x, dest[1] - creature.y)
-            else:
+        self._make_path_to_player(creature, player)
+
+        if creature.current_path:
+            dest = creature.current_path.pop(0)
+            blocker = _creature_at(dest[0], dest[1], self.owner)
+            if blocker is not None and blocker.creature and blocker.creature.team == creature.team:
+                # An ally is standing on the next tile of the shortest path
                 _sidestep_towards(creature, (player.x, player.y))
+            else:
+                creature.move(dest[0] - creature.x, dest[1] - creature.y)
+        else:
+            _sidestep_towards(creature, (player.x, player.y))
 
     def _make_path_to_player(self, creature, player):
         """
-        Makes path to player using the active pathfinding algorithm (A*, Dijkstra, BFS).
+        Plans a path to the player with this creature's algorithm and keeps
+        what the search did (for the F1 overlay and the stats panel).
         """
         start = (creature.x, creature.y)
         goal = (player.x, player.y)
-        algo = getattr(config, 'ACTIVE_PATHFINDING_ALGO', 'A*')
+        algo = algorithm_for(creature.name_instance)
+        graph = config.PATHFINDING
+        flies = creature.name_instance == "flying creature"
 
         if algo == 'Dijkstra':
-            visited = config.PATHFINDING.dijkstra(start, goal)
+            visited = graph.dijkstra(start, goal, ignore_terrain=flies)
         elif algo == 'BFS':
-            visited = config.PATHFINDING.bfs(start, goal)
+            visited = graph.bfs(start, goal)
+        elif algo == 'Greedy':
+            visited = graph.greedy_best_first(start, goal)
         else:  # A*
-            visited = config.PATHFINDING.a_star(start, goal)
+            visited = graph.a_star(start, goal)
 
         if visited and goal in visited:
-            path = config.PATHFINDING.find_path(start, goal, visited)
+            path = graph.find_path(start, goal, visited)
             creature.current_path = path
+            _record_stats(algo, graph)
+            self.owner.path_info = {
+                "algo": algo, "path": list(path), "nodes": graph.last_nodes_visited,
+                "time_ms": graph.last_time_ms, "cost": graph.last_cost,
+            }
         else:
             creature.current_path = []
+            self.owner.path_info = None

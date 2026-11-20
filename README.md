@@ -1,7 +1,7 @@
 # Infinite Dungeon — CS3101 Edition
 
 > **CS3101: Design and Analysis of Algorithms Course Project**  
-> An infinite, procedurally generated, top-down grid-based dungeon crawler built in Python & Pygame, featuring self-implemented graph algorithms, heuristic search, dynamic programming, and constraint-satisfaction backtracking.
+> An infinite, procedurally generated, top-down grid-based dungeon crawler built in Python & Pygame, featuring self-implemented graph algorithms, heuristic search, dynamic programming, and constraint-satisfaction backtracking — each one wired into actual gameplay, not just a menu.
 
 ![Demo](resource/readme/Demo.gif)
 
@@ -9,92 +9,102 @@
 
 ## 1. Project Overview
 
-**Infinite Dungeon** transforms an existing Pygame roguelike base into an infinite algorithmic dungeon crawler. Designed specifically for **CS3101 (Design and Analysis of Algorithms)**, all algorithms have been authored from first principles in readable, modular Python, integrated into actual real-time gameplay, and evaluated with empirical benchmarks:
+**Infinite Dungeon** transforms an existing Pygame roguelike base into an infinite algorithmic dungeon crawler. All algorithms are written from first principles in readable, modular Python, are part of real-time gameplay, and are evaluated with empirical benchmarks:
 
-1. **Procedural Dungeon Generation**:
-   - **Recursive Backtracking**: Randomized DFS grid carver creating dense labyrinths with alcoves and loop passages.
-   - **Randomized Room Placement + Minimum Spanning Tree (MST)**: Non-overlapping rectangular room placement connected via **Kruskal's Algorithm** with **Disjoint Set Union (DSU)** and cycle loop additions.
-   - **Seed Reproducibility**: Seed-deterministic generation across all floors ($Floor_n = \text{hash}(Seed, n)$).
-2. **Graph Traversal & Validation**:
-   - **BFS & DFS**: Evaluates graph connectivity and step distances.
-   - **Automated Validation**: Verifies spawn point walkability, exit reachable via BFS, and checks connected components.
-   - **Topological Repair**: Automatically carves Manhattan corridors between disconnected rooms.
-3. **Enemy Pathfinding**:
-   - **BFS**: Unweighted uniform-cost shortest path.
-   - **Dijkstra's Algorithm**: Min-heap shortest path accounting for variable terrain costs (Standard floor $w=1.0$, Mud hazard $w=3.0$).
-   - **A\* Search**: Priority queue with admissible Octile/Chebyshev distance heuristics.
-   - **Live In-Game Switching**: Switch enemy AI pathfinding between A*, Dijkstra, and BFS at runtime (`O` key).
-4. **Dynamic Programming Optimization**:
-   - **0/1 Knapsack Problem**: Optimizes equipment and vault relic selection under player carry-weight capacity.
-   - **Greedy Baseline Comparison**: Compares the 2D DP optimal subset against the Greedy efficiency ratio ($v_i / w_i$) heuristic (`K` key).
-5. **Constraint-Satisfaction Backtracking**:
-   - **Ancient Runic Vault Puzzle**: Multi-dial rune puzzle with adjacent inequality and target sum constraints, featuring a recursive backtracking solver with forward pruning (`U` key).
-6. **Algorithm Observation & Dev Mode**:
-   - Real-time on-screen HUD and transparent map overlays displaying explored node sets, path traces, visited counts, and execution runtimes (`F1` key).
-7. **Infinite Floor Progression**:
-   - Endless descent past Floor 6 with depth-scaled enemy HP, attack strength, and elite monster variety including flying beasts (`2` key on downstairs).
+1. **Procedural Dungeon Generation**
+   - **Recursive Backtracking**: randomised DFS maze carver with chambers and loop passages.
+   - **Random Rooms + Minimum Spanning Tree**: non-overlapping rooms connected by **Kruskal's algorithm** with **Disjoint Set Union** (path compression + union by rank), plus extra loop edges.
+   - **Double-sweep BFS** puts the spawn and the exit at the two ends of the dungeon (tree-diameter trick), so every floor has to be crossed.
+   - **Mud pools** (terrain cost 3) are grown by random walks, and pillars block movement but not sight.
+   - **Generation replay** (`B`): every generator records its steps and the game plays them back — rooms accepted/rejected, each Kruskal edge with the Union-Find decision, the DFS stack, the BFS waves.
+   - **Seeded**: each new run rolls a seed (shown in the F1 HUD); `FIXED_SEED` in `src/config.py` replays a dungeon exactly.
+2. **Graph Traversal & Validation**: BFS / DFS connectivity checks, connected components, automatic corridor repair, dead-end detection (used to hide bonus loot).
+3. **Enemy Pathfinding — every enemy type uses a different algorithm**
+
+   | Enemy | Algorithm | What you see in game |
+   | :--- | :--- | :--- |
+   | Slime | **BFS** | Ignores terrain cost — wades straight into mud and gets stuck |
+   | Goblin | **Greedy Best-First** | Follows its nose: tiny search, but often a worse route |
+   | Skeleton | **A\*** (Chebyshev heuristic) | Optimal path with a small, focused search |
+   | Flying beast | **Dijkstra** | Optimal; flies over mud so every tile costs the same |
+
+   `O` forces one algorithm on every enemy for side-by-side comparison. With `F1` each enemy's planned path is drawn in its algorithm's colour, with live average nodes / time / cost per algorithm.
+4. **Terrain costs are real turns**: entering mud costs 3 turns (the same weight the searches use) for the player and for enemies, so Dijkstra / A* routes really are faster. Click-to-move uses Dijkstra and walks around mud.
+5. **0/1 Knapsack on your real inventory**
+   - Every item has a weight and gold value; carry capacity = 18 + 2 × STR. Over capacity, every step costs an extra turn.
+   - One **treasure vault** per floor holds ~1.7× more relic weight than you can carry.
+   - `K` opens the **loot planner**: DP vs Greedy on your bag + nearby loot, the DP table `dp[i][w]` drawn as a heat map with the reconstruction path, and one key to apply either plan. Relics are banked as gold when you descend.
+6. **Constraint-Satisfaction Backtracking**: Ancient Runic Vault puzzle solved by recursive backtracking with forward pruning (`U`).
+7. **Algorithm Observation Mode** (`F1`): generation stats, seed, spawn→exit distance, per-algorithm pathfinding stats, explored-node overlay and per-enemy paths.
+8. **Infinite floor progression** with depth-scaled enemies and richer vaults.
 
 ---
 
 ## 2. In-Game Controls
 
 | Key | Action |
-|:---:|:---:|
-| **w / a / s / d** | Walk Up / Left / Down / Right |
-| **q / e / z / c** | Walk Diagonally (Up-Left, Up-Right, Down-Left, Down-Right) |
-| **x** | Wait a turn (Stay still) |
-| **Left Click** | Move player directly to clicked tile |
-| **m** | Toggle Minimap |
-| **t** | Pick up item / equipment |
-| **i** | Open Inventory & Equipment Screen |
-| **p** | Pause game |
-| **SPACE** | Cast Magic spells (Fireball, Lightning, Confusion) |
-| **TAB** | Toggle Free Camera mode |
-| **1 (on upstairs)** | Ascend to previous floor |
-| **2 (on downstairs)** | **Descend to next floor (Infinite Dungeon progression)** |
-| **F1** | **Toggle Algorithm Observation HUD & Explored Grid Overlay** |
-| **o** | **Cycle Enemy Pathfinding Algorithm (`A*` $\leftrightarrow$ `Dijkstra` $\leftrightarrow$ `BFS`)** |
-| **g** | **Cycle Next Floor Generator (`MST (Kruskal)` $\leftrightarrow$ `Recursive Backtracking` $\leftrightarrow$ `BSP`)** |
-| **k** | **Open 0/1 Knapsack Inventory Optimizer (DP vs Greedy comparison)** |
-| **u** | **Open Ancient Runic Vault (Backtracking constraint puzzle)** |
-| **F2 / F3** | Save game / Load game |
-| **ESC** | Close active menu |
+|:---:|:---|
+| **w / a / s / d** | Walk up / left / down / right (hold to keep walking; hold two for diagonals) |
+| **q / e / z / c** | Walk diagonally |
+| **x** | Wait a turn |
+| **Left click** | Walk to the clicked tile (Dijkstra route, avoids mud) |
+| *walk onto an item* | Pick it up automatically (skipped if it would make you over-encumbered) |
+| **t** | Pick up items here, even if too heavy |
+| **h / j / r** | Quick use: health potion / mana potion / teleport scroll |
+| **i** | Inventory & equipment (left click use/equip, right click drop) |
+| **SPACE** | Cast magic (Fireball, Lightning, Confusion) |
+| **k** | **0/1 Knapsack loot planner** (ENTER = take DP plan, G = take greedy plan, C = keep potions on/off) |
+| **b** | **Replay how this floor was generated** (SPACE pause, → next phase, ↑/↓ speed, R restart) |
+| **o** | **Cycle enemy pathfinding**: Per-type → A\* → Dijkstra → BFS → Greedy |
+| **g** | **Cycle next floor's generator**: MST (Kruskal) → Recursive Backtracking → BSP |
+| **u** | **Ancient Runic Vault** (backtracking puzzle) |
+| **F1** | **Algorithm observation HUD & overlays** |
+| **m** | Toggle minimap (shows the vault, and MST edges while F1 is on) |
+| **v** | Auto-explore to the nearest unseen tile |
+| **TAB** | Free camera (ENTER walks there) |
+| **1** (on upstairs) / **2** (on downstairs) | Previous floor / next floor (relics are banked as gold) |
+| **p** | Pause |
+| **F2 / F3** | Save / load |
+| **ESC** | Close the active menu |
 
 ---
 
 ## 3. Quick Start & Execution
 
 ### 3.1 Prerequisites
-- Python 3.9+ (Tested on Python 3.14.7)
-- Pygame or Pygame-CE:
+- Python 3.9+ (tested on Python 3.12.8 and 3.14.7)
+- Pygame-CE:
   ```bash
   pip install pygame-ce
   ```
 
 ### 3.2 Running the Game
-To launch the interactive game:
 ```bash
 python src/main.py
 ```
 
-### 3.3 Running Automated Unit Tests
-To execute the automated verification test suite (14 unit tests covering BFS/DFS reachability, Dijkstra & A* path cost optimality, heuristic admissibility, dungeon connectivity, and knapsack DP):
+### 3.3 Running the Unit Tests
+21 tests: BFS/DFS reachability, Dijkstra & A\* optimality, heuristic admissibility, Greedy Best-First validity and sub-optimality, dungeon connectivity, seed reproducibility, double-sweep exit placement, Kruskal trace (|V| − 1 edges, sorted order), trace-does-not-change-output, knapsack DP / greedy / reconstruction, backtracking puzzle.
 ```bash
 python -m unittest tests/test_algorithms.py
 ```
 
-### 3.4 Running the Empirical Benchmark Suite
-To run the automated, headless benchmarking suite across all algorithms, grid sizes ($20\times 20$, $35\times 35$, $50\times 50$), and seeds:
+### 3.4 Running the Benchmark Suite
+Headless, writes every record to `benchmark_results.csv`:
+1. BFS vs Dijkstra vs A\* vs Greedy, spawn → exit on 20×20 / 35×35 / 50×50 floors
+2. Enemy chase queries (600 in-game style searches, 4–12 steps)
+3. Recursive Backtracking vs Rooms + MST generation
+4. Knapsack DP vs Greedy on random instances and on 1,000 realistic treasure vaults
 ```bash
 python benchmark_runner.py
 ```
-This runs all experiments headlessly and exports the empirical records to [`benchmark_results.csv`](file:///benchmark_results.csv).
 
 ---
 
 ## 4. Documentation Index
 
-- **[`PROJECT_AUDIT.md`](file:///PROJECT_AUDIT.md)**: Initial codebase audit, identified systems, architectural analysis, and refactoring strategy.
-- **[`ALGORITHMS.md`](file:///ALGORITHMS.md)**: Detailed technical specifications, pseudo-code, mathematical formulations, admissibility proofs, and asymptotic complexity analysis ($O(V+E)$, $O((V+E)\log V)$, $O(N \cdot W)$).
-- **[`BENCHMARKS.md`](file:///BENCHMARKS.md)**: Experimental methodology, benchmark results tables, memory profiles, and algorithmic interpretation.
-- **[`ATTRIBUTION.md`](file:///ATTRIBUTION.md)**: Original base repository credit, pixel art sprite licenses, and source credits.
+- **[`presentation/`](presentation/README.md)**: presentation material — talk outline, one file per algorithm area, live demo script, results, and likely viva questions.
+- **[`ALGORITHMS.md`](ALGORITHMS.md)**: specifications, pseudo-code, proofs and complexity of every algorithm, and where each one lives in the game.
+- **[`BENCHMARKS.md`](BENCHMARKS.md)**: methodology, results tables and interpretation.
+- **[`PROJECT_AUDIT.md`](PROJECT_AUDIT.md)**: the original codebase audit and refactoring strategy.
+- **[`ATTRIBUTION.md`](ATTRIBUTION.md)**: base repository credit and asset licenses.

@@ -2,7 +2,8 @@
 pathfinding_algorithms.py
 CS3101: Enemy Pathfinding and Shortest Path Optimization
 Implementations of Breadth-First Search (BFS), Dijkstra's Algorithm,
-and A* Search with admissible heuristics and terrain cost support.
+A* Search with admissible heuristics, and Greedy Best-First Search
+(heuristic-only, fast but not optimal), all with terrain cost support.
 """
 
 import heapq
@@ -344,18 +345,103 @@ def astar_path(grid, start, goal, walkable_types=None, terrain_costs=None,
 
 
 # ---------------------------------------------------------------------------
+# 4. Greedy Best-First Search - heuristic only (fast, NOT optimal)
+# ---------------------------------------------------------------------------
+def greedy_best_first_path(grid, start, goal, walkable_types=None, terrain_costs=None,
+                           heuristic_fn=None, diagonal=True):
+    """
+    Greedy Best-First Search: always expands the open node that *looks*
+    closest to the goal, ie priority f(n) = h(n) only (A* uses g(n) + h(n)).
+
+    It ignores the cost already paid, so it usually explores very few nodes
+    but can return a longer / more expensive path than A* or Dijkstra
+    (it happily walks through mud or hugs a wall into a detour).
+    With a closed set it is still complete on a finite grid.
+
+    Time Complexity: O((V + E) log V) worst case, typically far less
+    Space Complexity: O(V)
+    """
+    t0 = time.perf_counter()
+    if walkable_types is None:
+        walkable_types = set(DEFAULT_TERRAIN_COSTS.keys())
+    costs = terrain_costs or DEFAULT_TERRAIN_COSTS
+
+    height = len(grid)
+    width = len(grid[0]) if height > 0 else 0
+
+    if not (0 <= start[0] < width and 0 <= start[1] < height and 0 <= goal[0] < width and 0 <= goal[1] < height):
+        return PathfindingResult(algorithm_name="Greedy Best-First")
+    if grid[start[1]][start[0]] not in walkable_types or grid[goal[1]][goal[0]] not in walkable_types:
+        return PathfindingResult(algorithm_name="Greedy Best-First")
+    if start == goal:
+        return PathfindingResult(path=[start], path_cost=0.0, nodes_visited=1,
+                                 explored_nodes={start: 0}, algorithm_name="Greedy Best-First")
+
+    if heuristic_fn is None:
+        heuristic_fn = heuristic_octile if diagonal else heuristic_manhattan
+
+    pq = [(heuristic_fn(start, goal), 0, start[0], start[1])]
+    counter = 0
+    came_from = {start: None}
+    closed = set()
+    nodes_visited = 0
+    found = False
+
+    while pq:
+        _, _, cx, cy = heapq.heappop(pq)
+        curr = (cx, cy)
+        if curr in closed:
+            continue
+        closed.add(curr)
+        nodes_visited += 1
+        if curr == goal:
+            found = True
+            break
+        for nx, ny in get_neighbors(cx, cy, width, height, diagonal=diagonal):
+            neighbor = (nx, ny)
+            if neighbor not in came_from and grid[ny][nx] in walkable_types:
+                came_from[neighbor] = curr
+                counter += 1
+                heapq.heappush(pq, (heuristic_fn(neighbor, goal), counter, nx, ny))
+
+    path = []
+    path_cost = 0.0
+    if found:
+        curr = goal
+        while curr is not None:
+            path.append(curr)
+            curr = came_from[curr]
+        path.reverse()
+        # Real cost of the path it found (so it can be compared with A* / Dijkstra)
+        for (ax, ay), (bx, by) in zip(path, path[1:]):
+            step_weight = costs.get(grid[by][bx], 1.0)
+            is_diag = ax != bx and ay != by
+            path_cost += step_weight * (SQRT2 if is_diag and diagonal else 1.0)
+
+    t1 = time.perf_counter()
+    return PathfindingResult(
+        path=path,
+        path_cost=path_cost,
+        nodes_visited=nodes_visited,
+        explored_nodes={n: 0 for n in came_from},
+        execution_time_ms=(t1 - t0) * 1000.0,
+        algorithm_name="Greedy Best-First"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Pathfinding Dispatcher / Controller
 # ---------------------------------------------------------------------------
 class PathfindingManager:
     """Manages active pathfinding strategy and telemetry for entities."""
-    ALGORITHMS = ["A*", "Dijkstra", "BFS"]
+    ALGORITHMS = ["A*", "Dijkstra", "BFS", "Greedy"]
 
     def __init__(self, active_algorithm="A*"):
         self.active_algorithm = active_algorithm
         self.last_result = None
 
     def cycle_algorithm(self):
-        """Cycles through available algorithms: A* -> Dijkstra -> BFS -> A*."""
+        """Cycles through available algorithms: A* -> Dijkstra -> BFS -> Greedy -> A*."""
         idx = self.ALGORITHMS.index(self.active_algorithm)
         self.active_algorithm = self.ALGORITHMS[(idx + 1) % len(self.ALGORITHMS)]
         return self.active_algorithm
@@ -367,6 +453,9 @@ class PathfindingManager:
         elif self.active_algorithm == "Dijkstra":
             res = dijkstra_path(grid, start, goal, walkable_types=walkable_types, 
                                 terrain_costs=terrain_costs, diagonal=diagonal)
+        elif self.active_algorithm == "Greedy":
+            res = greedy_best_first_path(grid, start, goal, walkable_types=walkable_types,
+                                         terrain_costs=terrain_costs, diagonal=diagonal)
         else:  # A*
             res = astar_path(grid, start, goal, walkable_types=walkable_types, 
                              terrain_costs=terrain_costs, diagonal=diagonal)

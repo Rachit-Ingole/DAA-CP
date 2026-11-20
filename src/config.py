@@ -34,7 +34,11 @@ BASE_SEED = 1337
 # Algorithm Dev / Observation Mode & Telemetry
 DEV_OBSERVATION_MODE = True
 FULL_MAP_VISIBLE = True
-ACTIVE_PATHFINDING_ALGO = "A*"  # "A*", "Dijkstra", "BFS"
+# "Per-type" = each enemy uses its own algorithm (see ENEMY_ALGORITHMS);
+# "A*", "Dijkstra", "BFS", "Greedy" = force that algorithm on every enemy
+ACTIVE_PATHFINDING_ALGO = "Per-type"
+# Running totals per algorithm: {algo: {"calls", "nodes", "time_ms", "cost"}}
+PATH_STATS = {}
 LAST_PATHFINDING_RESULT = None
 
 # Knapsack optimization capacity
@@ -79,6 +83,7 @@ def new_game():
     global CURRENT_FLOOR, TURN_COUNT, MAP_INFO, CAMERA, PATHFINDING, PLAYER, GAME_DATA, FOV, PARTICLE_LIST, BASE_SEED
 
     BASE_SEED = FIXED_SEED if FIXED_SEED is not None else random.randint(1, 999999)
+    PATH_STATS.clear()
     CURRENT_FLOOR = 1
     # Save this
     TURN_COUNT = 0
