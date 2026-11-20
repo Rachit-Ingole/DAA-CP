@@ -97,6 +97,8 @@ FONT_CONTROL_TEXT = pygame.font.Font(font_path_name, 19)
 FONT_DEBUG_MESSAGE = pygame.font.Font(font_path_name, 28)
 FONT_MESSAGE_TEXT = pygame.font.Font(font_path_name, 28)
 FONT_ITEM_DESCRIPTION = pygame.font.Font(font_path_name, 28)
+FONT_HUD_SMALL = pygame.font.Font(font_path_name, 15)
+FONT_LOG = pygame.font.Font(font_path_name, 20)
 TEXT_SPACE_BUFFER = 5
 
 # MESSAGE DEFAULTS
@@ -105,6 +107,34 @@ NUM_MESSAGES = 8
 # ANIMATIONS
 ANIMATION_SPEED = 0.75
 FPS = 60
+
+# SMOOTH MOVEMENT / GAME FEEL
+# Time (ms) an entity takes to glide from one tile to the next
+MOVE_TWEEN_MS = 115
+# How long (ms) a movement key must be held before continuous walking kicks in
+HOLD_REPEAT_DELAY_MS = 170
+# Attack "lunge" animation length (ms) and how far (fraction of a tile) it reaches
+LUNGE_MS = 150
+LUNGE_DISTANCE = 0.35
+# Red flash on a creature that takes damage (ms)
+HIT_FLASH_MS = 160
+# Fade-out time (ms) for a creature that dies
+DEATH_FADE_MS = 350
+# Screen shake when the player takes damage
+SHAKE_MS = 160
+SHAKE_PIXELS = 5
+# Fade from black after changing floors (ms)
+LEVEL_FADE_MS = 450
+
+# TERRAIN / CARRY WEIGHT RULES
+# Entering a mud tile costs this many turns (matches the pathfinding edge
+# weight of 3.0), so Dijkstra / A* routes that avoid mud are genuinely faster
+MUD_TURN_COST = 3
+# Carry capacity = BASE_CARRY_CAPACITY + CARRY_PER_STRENGTH * strength
+BASE_CARRY_CAPACITY = 18
+CARRY_PER_STRENGTH = 2
+# Extra turns every step costs while carrying more than the capacity
+ENCUMBERED_EXTRA_TURNS = 1
 
 # RAYCASTING
 RAYS = 360

@@ -1,3 +1,4 @@
+import os
 import pstats, io
 import cProfile
 import pygame
@@ -5,7 +6,15 @@ import config
 import menu
 
 def profile(fnc):
-    """A decorator that uses cProfile to profile a function"""
+    """
+    A decorator that uses cProfile to profile a function.
+
+    Profiling slows the whole game down noticeably, so it is only enabled
+    when the DAA_PROFILE environment variable is set, eg:
+        DAA_PROFILE=1 python src/main.py
+    """
+    if not os.environ.get("DAA_PROFILE"):
+        return fnc
 
     def inner(*args, **kwargs):
         pr = cProfile.Profile()

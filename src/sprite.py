@@ -1,5 +1,6 @@
 from constant import *
 import os
+import relics
 
 # Image path
 KNIGHT = 'creatures/knight/knight_idle_anim_f0.png'
@@ -281,6 +282,8 @@ class GameSprites:
 
             "camera": load_image(CAMERA)
         }
+        # Vault treasure (drawn in code, see relics.py)
+        self.entity_dict.update(relics.make_relic_sprites())
 
         self.tile_dict = {
             WALL: {

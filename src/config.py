@@ -1,5 +1,6 @@
 from constant import *
 import pygame
+import random
 import sprite
 import entity_generator
 import gamemap
@@ -24,6 +25,10 @@ TURN_COUNT = 0
 
 # Procedural generation settings
 DUNGEON_GEN_TYPE = "MST"  # "MST", "BACKTRACKING", "BSP"
+# Set FIXED_SEED to an int to replay the exact same dungeon every run (handy
+# for demos / benchmarks); None rolls a new seed for every new game. The
+# active seed is shown in the F1 algorithm HUD so any run can be reproduced.
+FIXED_SEED = None
 BASE_SEED = 1337
 
 # Algorithm Dev / Observation Mode & Telemetry
@@ -71,8 +76,9 @@ def new_game():
     """
     Makes new game by deleting old data and making new data
     """
-    global CURRENT_FLOOR, TURN_COUNT, MAP_INFO, CAMERA, PATHFINDING, PLAYER, GAME_DATA, FOV
+    global CURRENT_FLOOR, TURN_COUNT, MAP_INFO, CAMERA, PATHFINDING, PLAYER, GAME_DATA, FOV, PARTICLE_LIST, BASE_SEED
 
+    BASE_SEED = FIXED_SEED if FIXED_SEED is not None else random.randint(1, 999999)
     CURRENT_FLOOR = 1
     # Save this
     TURN_COUNT = 0

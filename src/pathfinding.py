@@ -56,7 +56,10 @@ class Graph:
         self.map_info = map_info
         for y in range(map_info.tile_height):
             for x in range(map_info.tile_width):
-                if not map_info.tile_array[y][x].type == WALL:
+                # Walls and obstacle pillars both block movement, so neither
+                # may be a node (otherwise paths route through pillars and
+                # creatures get stuck bumping into them)
+                if map_info.tile_array[y][x].type not in (WALL, OBSTACLE):
                     self.nodes[(x, y)] = (Node(x, y))
                 else:
                     self.walls[(x, y)] = map_info.tile_array[y][x].type

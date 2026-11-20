@@ -176,57 +176,86 @@ def spell_description(spell_name):
     return description
 
 
+def _enemies_of(caster):
+    enemies = []
+    for team, entity_list in config.GAME_DATA.creature_data.items():
+        if team != caster.creature.team:
+            enemies += entity_list
+    return enemies
+
+
+def _try_pay_mp(caster, spell_name):
+    """Pays the spell's MP cost. Returns False (with a message) if it can't."""
+    cost = data[spell_name]["cost"]
+    if caster.creature.stat.mp < cost:
+        game_text.add_game_message_to_print(f"Not enough MP for {spell_name} "
+                                            f"({caster.creature.stat.mp}/{cost})", LIGHT_GREY)
+        return False
+    caster.creature.stat.mp -= cost
+    return True
+
+
+# How long (ms) a spell takes to travel one tile
+SPELL_MS_PER_TILE = 45
+
+
+def _fly_spell(image, line, on_tile):
+    """
+    Animates a spell gliding along line at full frame rate (instead of
+    hopping one tile per frame). When it reaches each tile on_tile(x, y) is
+    called; if that returns True the spell stops there.
+
+    Args:
+        image (Surface): spell sprite
+        line (List): tiles to travel through (starting at the caster)
+        on_tile (fn(x, y) -> bool): hit test for each tile reached
+    """
+    if not line:
+        return
+    prev = line[0]
+    for tile in line:
+        t0 = pygame.time.get_ticks()
+        while prev != tile:
+            pygame.event.pump()
+            t = min(1.0, (pygame.time.get_ticks() - t0) / SPELL_MS_PER_TILE)
+            game.update_game()
+            x = prev[0] + (tile[0] - prev[0]) * t
+            y = prev[1] + (tile[1] - prev[1]) * t
+            config.SURFACE_MAIN.blit(image, config.CAMERA.world_to_screen(x, y))
+            pygame.display.update()
+            config.CLOCK.tick(FPS)
+            if t >= 1.0:
+                break
+        prev = tile
+        if on_tile(*tile):
+            break
+
+
 def cast_fireball(caster, line):
     """
     Throws fireball following line stopping at first enemy hit.
-    
+
     Args:
         caster (Object): Creature that casted fireball
         line (List): List of coordinates for fireball to follow
+
+    Returns:
+        bool: True if the spell was cast
     """
-    base_damage = data["fireball"]["damage"]
-    mp_cost = data["fireball"]["cost"]
+    if not _try_pay_mp(caster, "fireball"):
+        return False
+    damage = caster.creature.stat.magic_damage(data["fireball"]["damage"])
+    enemies = _enemies_of(caster)
 
-    particle_group = []
-    particle.MagicParticle(particle_group, config.SPRITE.magic['fireball'], line)
+    def hit(x, y):
+        for enemy in enemies:
+            if (enemy.x, enemy.y) == (x, y):
+                caster.creature.attack(enemy, damage)
+                return True
+        return False
 
-    damage = caster.creature.stat.magic_damage(base_damage)
-
-    # If caster has enough mp to cast magic
-    if caster.creature.stat.mp - mp_cost >= 0:
-        caster.creature.stat.mp -= mp_cost
-        # get list of tiles from start to end
-        enemies = []
-        for team, entity in config.GAME_DATA.creature_data.items():
-            if team != caster.creature.team:
-                enemies += entity
-        creature_hit = False
-        for (x, y) in line:
-            if creature_hit:
-                break
-            # damage first enemy in list of tile
-            for enemy in enemies:
-                if (enemy.x, enemy.y) == (x, y):
-                    caster.creature.attack(enemy, damage)
-                    creature_hit = True
-                    break
-
-            _update_spell(particle_group)
-
-
-def _update_spell(particle_group):
-    """
-    Updates the spell casted
-
-    Args:
-        particle_group (List): List of particles
-    """
-    game.update_game()
-    for magic in particle_group:
-        draw.draw_at_camera_offset_with_image(magic)
-        magic.update()
-    config.CLOCK.tick(20)
-    pygame.display.update()
+    _fly_spell(config.SPRITE.magic['fireball'], line, hit)
+    return True
 
 
 # TODO: make it so enemies wont target through their allies
@@ -237,29 +266,23 @@ def cast_lightning(caster, line):
     Args:
         caster (Object): Creature that casted lightning
         line (List): List of coordinates for lightning to follow
+
+    Returns:
+        bool: True if the spell was cast
     """
-    base_damage = data["lightning"]["damage"]
-    mp_cost = data["lightning"]["cost"]
+    if not _try_pay_mp(caster, "lightning"):
+        return False
+    damage = caster.creature.stat.magic_damage(data["lightning"]["damage"])
+    enemies = _enemies_of(caster)
 
-    particle_group = []
-    particle.MagicParticle(particle_group, config.SPRITE.magic['lightning'], line)
+    def hit(x, y):
+        for enemy in list(enemies):
+            if (enemy.x, enemy.y) == (x, y):
+                caster.creature.attack(enemy, damage)
+        return False  # pierces through everything
 
-    damage = caster.creature.stat.magic_damage(base_damage)
-
-    # If caster has enough mp to cast magic
-    if caster.creature.stat.mp - mp_cost >= 0:
-        caster.creature.stat.mp -= mp_cost
-        # get list of tiles from start to end
-        enemies = []
-        for team, entity in config.GAME_DATA.creature_data.items():
-            if team != caster.creature.team:
-                enemies += entity
-        for (x, y) in line:
-            for enemy in enemies:
-                if (enemy.x, enemy.y) == (x, y):
-                    caster.creature.attack(enemy, damage)
-
-            _update_spell(particle_group)
+    _fly_spell(config.SPRITE.magic['lightning'], line, hit)
+    return True
 
 
 def cast_confusion(caster, line):
@@ -269,42 +292,29 @@ def cast_confusion(caster, line):
     Args:
         caster (Object): Creature that casted confusion
         line (List): List of coordinates for confusion to follow
+
+    Returns:
+        bool: True if the spell was cast
     """
-    base_damage = data["confusion"]["damage"]
-    mp_cost = data["confusion"]["cost"]
-
-    particle_group = []
-    particle.MagicParticle(particle_group, config.SPRITE.magic['confusion'], line)
-
+    if not _try_pay_mp(caster, "confusion"):
+        return False
     # Special case where spell shouldn't do damage but instead duration scales with caster stat
-    turn_count = caster.creature.stat.magic_damage(base_damage)
+    turn_count = caster.creature.stat.magic_damage(data["confusion"]["damage"])
+    enemies = _enemies_of(caster)
 
-    # If caster has enough mp to cast magic
-    if caster.creature.stat.mp - mp_cost >= 0:
-        caster.creature.stat.mp -= mp_cost
-        # get list of tiles from start to end
-        enemies = []
-        for team, entity in config.GAME_DATA.creature_data.items():
-            if team != caster.creature.team:
-                enemies += entity
-        creature_hit = False
-        for (x, y) in line:
-            if creature_hit:
-                break
-            # hit first enemy in list of tile
-            for enemy in enemies:
-                if (enemy.x, enemy.y) == (x, y):
-                    # TODO: could change constructor to take in owner for
-                    #       confuseai if decide that creatures are only confused
-                    #       from magic
-                    confuseAI = ai.ConfuseAI(enemy.ai, turn_count)
-                    confuseAI.owner = enemy
-                    enemy.ai = confuseAI
-                    creature_hit = True
-                    game_text.add_game_message_to_print(enemy.object_name + " is confused!", BLUE)
-                    break
+    def hit(x, y):
+        for enemy in enemies:
+            if (enemy.x, enemy.y) == (x, y):
+                confuse_ai = ai.ConfuseAI(enemy.ai, turn_count)
+                confuse_ai.owner = enemy
+                enemy.ai = confuse_ai
+                particle.FloatingTextParticle(enemy.x, enemy.y, "Confused!", config.PARTICLE_LIST, (200, 160, 255))
+                game_text.add_game_message_to_print(enemy.object_name + " is confused!", BLUE)
+                return True
+        return False
 
-            _update_spell(particle_group)
+    _fly_spell(config.SPRITE.magic['confusion'], line, hit)
+    return True
 
 
 # Lookup table for spell methods

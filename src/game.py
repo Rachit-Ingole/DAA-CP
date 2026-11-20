@@ -13,8 +13,299 @@ import buttonmanager
 import game_data
 import entity_generator
 import game_text
+import particle
+import relics
+import generation_replay
+import item as item_module
 
 pygame.font.init()
+
+
+# ============================================================================
+# Movement input
+#
+# Movement is turn based on a grid, but it should *feel* continuous:
+#   * tapping a key takes exactly one step, immediately
+#   * holding a key keeps walking, one step every time the previous glide ends
+#   * holding two keys (eg W + D) walks diagonally
+#   * a key pressed while a step is still animating is buffered, not lost
+# ============================================================================
+MOVE_KEYS = {
+    pygame.K_a: (-1, 0), pygame.K_LEFT: (-1, 0), pygame.K_KP4: (-1, 0),
+    pygame.K_d: (1, 0), pygame.K_RIGHT: (1, 0), pygame.K_KP6: (1, 0),
+    pygame.K_w: (0, -1), pygame.K_UP: (0, -1), pygame.K_KP8: (0, -1),
+    pygame.K_s: (0, 1), pygame.K_DOWN: (0, 1), pygame.K_KP2: (0, 1),
+    pygame.K_q: (-1, -1), pygame.K_KP7: (-1, -1),
+    pygame.K_e: (1, -1), pygame.K_KP9: (1, -1),
+    pygame.K_z: (-1, 1), pygame.K_KP1: (-1, 1),
+    pygame.K_c: (1, 1), pygame.K_KP3: (1, 1),
+    pygame.K_x: (0, 0), pygame.K_KP5: (0, 0),
+}
+
+_input = {
+    "held_since": {},       # key -> time (ms) it went down
+    "buffered": None,       # (dx, dy) pressed while previous step was animating
+    "next_turn_at": 0,      # earliest time (ms) the player may act again
+    "auto_path": [],        # remaining coords for click-to-move / auto explore
+    "auto_ignore_enemies": False,
+    "pending_enemy_turns": 0,   # extra enemy turns owed after a slow move (mud / heavy bag)
+    "enemy_turn_at": 0,         # when the next of those extra turns plays out
+}
+
+# Gap (ms) between the extra enemy turns of a slow move, so they visibly
+# happen one step at a time instead of all at once
+EXTRA_ENEMY_TURN_MS = 95
+
+
+def reset_input_state():
+    """Clears held keys, buffered input and any auto-walk in progress."""
+    _input["held_since"].clear()
+    _input["buffered"] = None
+    _input["auto_path"] = []
+    _input["next_turn_at"] = 0
+    _input["pending_enemy_turns"] = 0
+
+
+def _player_ready():
+    return _input["pending_enemy_turns"] == 0 and pygame.time.get_ticks() >= _input["next_turn_at"]
+
+
+def move_turn_cost(x, y, player=None):
+    """
+    How many turns stepping onto (x, y) costs the player:
+    MUD_TURN_COST for mud (same 3.0 weight Dijkstra / A* use), 1 otherwise,
+    plus ENCUMBERED_EXTRA_TURNS while carrying more than the carry capacity.
+    """
+    player = player or config.PLAYER
+    cost = MUD_TURN_COST if config.MAP_INFO.tile_array[y][x].type == HAZARD else 1
+    if item_module.is_encumbered(player):
+        cost += ENCUMBERED_EXTRA_TURNS
+    return cost
+
+
+def _run_extra_enemy_turn():
+    """Enemies act while the player is still wading / staggering."""
+    for enemy in list(config.GAME_DATA.creature_data["enemy"]):
+        if enemy in config.GAME_DATA.creature_data["enemy"]:
+            enemy.update(0, 0)
+    config.TURN_COUNT += 1
+
+
+def take_player_turn(dx, dy):
+    """
+    Runs one game turn with the player moving by (dx, dy) and sets how long
+    until the player may act again (the glide time, or a bit longer for an
+    attack / wait so holding a key towards an enemy doesn't machine-gun it).
+
+    Returns:
+        True if the player actually changed tile
+    """
+    player = config.PLAYER
+    old = (player.x, player.y)
+    target = (player.x + dx, player.y + dy)
+    cost = 1
+    if (dx or dy) and 0 <= target[1] < config.MAP_INFO.tile_height and 0 <= target[0] < config.MAP_INFO.tile_width:
+        cost = move_turn_cost(*target)
+        # Glide slower when the step is expensive (set before the move so the
+        # tween picks it up)
+        player.move_scale = min(2.2, 1.0 + 0.6 * (cost - 1))
+
+    update_creatures(config.GAME_DATA.creature_data, dx, dy)
+    moved = (player.x, player.y) != old
+    now = pygame.time.get_ticks()
+
+    if not moved:
+        player.move_scale = 1.0
+        _input["next_turn_at"] = now + max(MOVE_TWEEN_MS, LUNGE_MS)
+        return False
+
+    if AUTO_PICKUP:
+        pick_up_items_here(announce_empty=False, automatic=True)
+    _announce_vault()
+
+    extra = cost - 1
+    if extra:
+        _input["pending_enemy_turns"] += extra
+        _input["enemy_turn_at"] = now + EXTRA_ENEMY_TURN_MS
+        label = "Mud!" if config.MAP_INFO.tile_array[player.y][player.x].type == HAZARD else "Heavy!"
+        particle.FloatingTextParticle(player.x, player.y, f"{label} +{extra} turn{'s' if extra > 1 else ''}",
+                                      config.PARTICLE_LIST, (205, 165, 120))
+    _input["next_turn_at"] = now + int(MOVE_TWEEN_MS * max(1.0, min(2.2, 1.0 + 0.6 * extra)))
+    return True
+
+
+def _request_step(direction):
+    """Step now if the player is ready, otherwise remember it for later."""
+    if _player_ready():
+        take_player_turn(*direction)
+    else:
+        _input["buffered"] = direction
+
+
+def _held_direction(now):
+    """
+    Combines every movement key that has been held long enough into one step.
+
+    Returns:
+        (dx, dy) or None if nothing is held long enough
+    """
+    dx = dy = 0
+    any_held = False
+    for key, since in _input["held_since"].items():
+        if now - since < HOLD_REPEAT_DELAY_MS:
+            continue
+        any_held = True
+        kx, ky = MOVE_KEYS[key]
+        dx += kx
+        dy += ky
+    if not any_held:
+        return None
+    return max(-1, min(1, dx)), max(-1, min(1, dy))
+
+
+def process_player_input():
+    """
+    Called once per frame: performs buffered steps, click-to-move steps and
+    continuous walking while keys are held.
+    """
+    # Forget keys that were released while a menu had focus (we never got the KEYUP)
+    pressed = pygame.key.get_pressed()
+    for key in list(_input["held_since"]):
+        if not pressed[key]:
+            del _input["held_since"][key]
+
+    if _input["pending_enemy_turns"] > 0:
+        if pygame.time.get_ticks() >= _input["enemy_turn_at"]:
+            _run_extra_enemy_turn()
+            _input["pending_enemy_turns"] -= 1
+            _input["enemy_turn_at"] = pygame.time.get_ticks() + EXTRA_ENEMY_TURN_MS
+        return
+
+    if not _player_ready():
+        return
+
+    if _input["buffered"] is not None:
+        direction = _input["buffered"]
+        _input["buffered"] = None
+        take_player_turn(*direction)
+        return
+
+    if _input["auto_path"]:
+        _step_auto_path()
+        return
+
+    direction = _held_direction(pygame.time.get_ticks())
+    if direction is not None:
+        take_player_turn(*direction)
+
+
+def _step_auto_path():
+    """Takes the next step of a click-to-move / auto-explore path."""
+    path = _input["auto_path"]
+    if not _input["auto_ignore_enemies"] and _check_if_enemy_in_fov(config.GAME_DATA.creature_data["enemy"]):
+        cancel_auto_path()
+        return
+    target = path.pop(0)
+    dx, dy = target[0] - config.PLAYER.x, target[1] - config.PLAYER.y
+    if max(abs(dx), abs(dy)) != 1:
+        cancel_auto_path()
+        return
+    take_player_turn(dx, dy)
+    if (config.PLAYER.x, config.PLAYER.y) != target:
+        # Blocked (or attacked something on the way): stop walking
+        cancel_auto_path()
+
+
+def cancel_auto_path():
+    _input["auto_path"] = []
+
+
+# ============================================================================
+# Items: picking up and quick use
+# ============================================================================
+# Walking onto an item picks it up (no extra key press / turn needed)
+AUTO_PICKUP = True
+
+# Hotkey -> consumable it uses straight from the inventory
+QUICK_USE_KEYS = {
+    pygame.K_h: "red potion",
+    pygame.K_j: "blue potion",
+    pygame.K_r: "teleport scroll",
+}
+
+
+def pick_up_items_here(announce_empty=True, automatic=False):
+    """
+    Picks up every item on the player's tile. Automatic pickup (walking onto
+    the tile) skips items the player dropped and anything that would go over
+    the carry capacity; pressing T takes them anyway.
+
+    Returns:
+        int: number of items picked up
+    """
+    picked = 0
+    for obj in map_items_at_coord(config.GAME_DATA.item_data, config.PLAYER.x, config.PLAYER.y):
+        if not obj.item or (automatic and obj.item.player_dropped):
+            continue
+        if obj.item.pick_up(config.PLAYER, respect_capacity=automatic):
+            picked += 1
+    if picked == 0 and announce_empty:
+        game_text.add_game_message_to_print("Nothing to pick up here", LIGHT_GREY)
+    return picked
+
+
+def count_in_inventory(item_name):
+    return sum(1 for e in config.PLAYER.container.inventory if e.item and e.item.name == item_name)
+
+
+def quick_use(item_name):
+    """
+    Uses the first item_name in the inventory without opening the inventory.
+    Using something takes a turn; a potion that would do nothing does not.
+    """
+    if not _player_ready():
+        return
+    for item_entity in config.PLAYER.container.inventory:
+        if item_entity.item and item_entity.item.name == item_name:
+            if item_entity.item.use_item():
+                cancel_auto_path()
+                take_player_turn(0, 0)
+            return
+    game_text.add_game_message_to_print(f"No {item_name}s left", LIGHT_GREY)
+
+
+def player_in_vault():
+    vault = getattr(config.MAP_INFO, 'vault_room', None)
+    if not vault:
+        return False
+    x1, y1, x2, y2 = vault
+    return x1 <= config.PLAYER.x <= x2 and y1 <= config.PLAYER.y <= y2
+
+
+def _announce_vault():
+    """First time the player walks into the vault: explain what to do."""
+    if player_in_vault() and not getattr(config.MAP_INFO, 'vault_announced', False):
+        config.MAP_INFO.vault_announced = True
+        particle.FloatingTextParticle(config.PLAYER.x, config.PLAYER.y, "Treasure Vault!",
+                                      config.PARTICLE_LIST, (255, 215, 80))
+        game_text.add_game_message_to_print(
+            "Treasure vault! Too much to carry - press [K] to plan the best haul", (255, 215, 80))
+
+
+def bank_relics():
+    """Relics carried down the stairs are converted into gold."""
+    inventory = config.PLAYER.container.inventory
+    banked = [e for e in inventory if e.item and relics.is_relic(e.item.name)]
+    if not banked:
+        return
+    total = sum(e.item.value for e in banked)
+    for e in banked:
+        inventory.remove(e)
+        e.item.current_container = None
+    config.GAME_DATA.gold = getattr(config.GAME_DATA, 'gold', 0) + total
+    game_text.add_game_message_to_print(
+        f"Banked {len(banked)} relic{'s' if len(banked) > 1 else ''} for {total} gold "
+        f"(total {config.GAME_DATA.gold})", (255, 215, 80))
 
 
 class Game:
@@ -22,18 +313,18 @@ class Game:
         """
         Initializes pygame
         """
-        # TODO: move game variables/config variables to game
-        # self.running = True
-
         self.playing = True
 
     def run(self):
         """
         Main game loop which takes in process player input updates screen
         """
+        reset_input_state()
+        config.PLAYER.snap_visual()
         while self.playing:
             config.CLOCK.tick(FPS)
             handle_events()
+            process_player_input()
             update_game()
             draw.draw_mouse()
             self.check_if_player_lost()
@@ -71,6 +362,9 @@ def handle_events():
         # Keyboard press
         elif event.type == pygame.KEYDOWN:
             _handle_keyboard_event(event)
+
+        elif event.type == pygame.KEYUP:
+            _input["held_since"].pop(event.key, None)
 
 
 def _handle_screen_resize(event):
@@ -113,22 +407,21 @@ def _handle_mouse_event_click(event):
             pressed_button.left_click_fn()
             return
 
-        # Move player to mouse click
+        # Move player to mouse click (the walk itself happens frame by frame
+        # in process_player_input, so the game keeps animating while walking)
         move_x, move_y = config.CAMERA.get_mouse_coord()
+        tile = config.MAP_INFO.tile_array[move_y][move_x]
 
-        if not config.MAP_INFO.tile_array[move_y][move_x].seen:
+        if not tile.seen or tile.type in (WALL, OBSTACLE):
             return
 
         start = (config.PLAYER.x, config.PLAYER.y)
         goal = (move_x, move_y)
-        visited = config.PATHFINDING.bfs(start, goal)
+        # Dijkstra (terrain-weighted) so click-to-move walks around mud
+        visited = config.PATHFINDING.dijkstra(start, goal)
         if visited:
             path = config.PATHFINDING.find_path(start, goal, visited)
             move_char_auto(path, True)
-
-        config.CLOCK.tick(FPS)
-        update_game()
-        pygame.display.flip()
 
 
 def _handle_keyboard_event(event):
@@ -139,36 +432,25 @@ def _handle_keyboard_event(event):
         event (Event): Keyboard event to handle
     """
     # Movement
-    if event.key == pygame.K_a:
-        update_creatures(config.GAME_DATA.creature_data, -1, 0)
-    elif event.key == pygame.K_d:
-        update_creatures(config.GAME_DATA.creature_data, 1, 0)
-    elif event.key == pygame.K_w:
-        update_creatures(config.GAME_DATA.creature_data, 0, -1)
-    elif event.key == pygame.K_q:
-        update_creatures(config.GAME_DATA.creature_data, -1, -1)
-    elif event.key == pygame.K_e:
-        update_creatures(config.GAME_DATA.creature_data, 1, -1)
-    elif event.key == pygame.K_z:
-        update_creatures(config.GAME_DATA.creature_data, -1, 1)
-    elif event.key == pygame.K_c:
-        update_creatures(config.GAME_DATA.creature_data, 1, 1)
-    elif event.key == pygame.K_s:
-        update_creatures(config.GAME_DATA.creature_data, 0, 1)
-    elif event.key == pygame.K_x:
-        update_creatures(config.GAME_DATA.creature_data, 0, 0)
+    if event.key in MOVE_KEYS:
+        if event.key in _input["held_since"]:
+            return  # OS key-repeat; continuous walking is handled per frame
+        _input["held_since"][event.key] = pygame.time.get_ticks()
+        cancel_auto_path()
+        _request_step(MOVE_KEYS[event.key])
 
     # Mini_map
     elif event.key == pygame.K_m:
         toggle_minimap()
 
-    # Pickup/Drop Item
+    # Pick up item(s) on this tile (only costs a turn if something was picked up)
     elif event.key == pygame.K_t:
-        objects_at_player = map_items_at_coord(config.GAME_DATA.item_data, config.PLAYER.x, config.PLAYER.y)
-        for obj in objects_at_player:
-            if obj.item:
-                obj.item.pick_up(config.PLAYER)
-        update_creatures(config.GAME_DATA.creature_data, 0, 0)
+        if pick_up_items_here():
+            take_player_turn(0, 0)
+
+    # Quick use consumables
+    elif event.key in QUICK_USE_KEYS:
+        quick_use(QUICK_USE_KEYS[event.key])
 
     elif event.key == pygame.K_F12:
         _toggle_wallhack()
@@ -197,13 +479,19 @@ def _handle_keyboard_event(event):
             if config.CURRENT_FLOOR > 1:
                 config.CURRENT_FLOOR -= 1
                 config.GAME_DATA.transition_previous_level()
+                _after_floor_change()
+                game_text.add_game_message_to_print(
+                    f"Ascended to Floor {config.CURRENT_FLOOR} - {draw.floor_theme()[0]}", YELLOW)
 
     # Goes to next level (Infinite Dungeon)
     elif event.key == pygame.K_2:
         if config.MAP_INFO.tile_array[config.PLAYER.y][config.PLAYER.x].type == DOWNSTAIR:
+            bank_relics()
             config.CURRENT_FLOOR += 1
             config.GAME_DATA.transition_next_level()
-            game_text.add_game_message_to_print(f"Descended to Floor {config.CURRENT_FLOOR}!", YELLOW)
+            _after_floor_change()
+            game_text.add_game_message_to_print(
+                f"Descended to Floor {config.CURRENT_FLOOR} - {draw.floor_theme()[0]}!", YELLOW)
 
     # CS3101: Algorithm Developer Mode / HUD Toggle
     elif event.key == pygame.K_F1:
@@ -227,9 +515,14 @@ def _handle_keyboard_event(event):
         config.DUNGEON_GEN_TYPE = gens[(idx + 1) % len(gens)]
         game_text.add_game_message_to_print(f"Next Floor Generator: {config.DUNGEON_GEN_TYPE}", GREEN)
 
-    # CS3101: Open 0/1 Knapsack Optimizer
+    # CS3101: Open 0/1 Knapsack loot planner (your real bag + nearby loot)
     elif event.key == pygame.K_k:
         menu.knapsack_menu()
+
+    # CS3101: Replay how this floor was generated, step by step
+    elif event.key == pygame.K_b:
+        generation_replay.replay_floor_generation()
+        reset_input_state()
 
     # CS3101: Open Backtracking Rune Vault Puzzle
     elif event.key == pygame.K_u:
@@ -302,18 +595,21 @@ def _toggle_camera():
                 elif event.key == pygame.K_ESCAPE:
                     camera_on = False
 
+                # Keep the free camera inside the map
+                free_camera.x = max(0, min(config.MAP_INFO.tile_width - 1, free_camera.x))
+                free_camera.y = max(0, min(config.MAP_INFO.tile_height - 1, free_camera.y))
+
         config.CLOCK.tick(FPS)
         config.CAMERA.update(free_camera)
 
-        if not config.WALL_HACK:
-            config.FOV = fov.new_fov(config.MAP_INFO)
-
-        fov.ray_casting(config.MAP_INFO, config.MAP_INFO.tile_array, config.FOV, config.PLAYER)
-        fov.change_seen(config.MAP_INFO, config.MAP_INFO.tile_array, config.FOV)
+        _update_fov()
 
         draw.draw_game()
-        draw.draw_at_camera_offset_without_image(free_camera)
+        draw.draw_entity(free_camera, shadow=False)
         pygame.display.flip()
+
+    # Snap back to the player and ignore keys pressed while in free camera
+    reset_input_state()
 
 
 def _move_to_free_camera(free_camera):
@@ -329,8 +625,8 @@ def _move_to_free_camera(free_camera):
 
     start = (config.PLAYER.x, config.PLAYER.y)
     goal = (free_camera.x, free_camera.y)
-    # Generates path
-    visited = config.PATHFINDING.bfs(start, goal)
+    # Generates path (Dijkstra, so it avoids mud)
+    visited = config.PATHFINDING.dijkstra(start, goal)
     # If path is generated move player
     if visited:
         path = config.PATHFINDING.find_path(start, goal, visited)
@@ -402,9 +698,13 @@ def update_creatures(creature_dict, dx, dy):
 
 def generate_camera():
     """
-    Generates camera
+    Generates camera (keeping the current window size if it was resized)
     """
-    config.CAMERA = Camera(config.MAP_INFO)
+    old = getattr(config, 'CAMERA', None)
+    if old is not None:
+        config.CAMERA = Camera(config.MAP_INFO, old.camera_width, old.camera_height)
+    else:
+        config.CAMERA = Camera(config.MAP_INFO)
 
 
 def populate_map():
@@ -430,6 +730,11 @@ def populate_map():
 
     if config.CURRENT_FLOOR % 5 == 0:
         config.GAME_DATA.item_data.append(entity_generator.generate_win_item(config.MAP_INFO.map_tree))
+
+    # One treasure vault per floor (the knapsack problem the player solves)
+    config.MAP_INFO.vault_room, vault_relics = entity_generator.generate_vault(config.MAP_INFO.map_tree)
+    config.MAP_INFO.vault_announced = False
+    config.GAME_DATA.item_data.extend(vault_relics)
 
 
 def _generate_new_map():
@@ -468,70 +773,82 @@ def new_game():
     """
     config.new_game()
     populate_map()
+    _after_floor_change()
 
 
-def update_game():
+_fov_state = {"key": None}
+
+
+def _update_fov():
     """
-    Updates camera and fov
+    Recomputes the player's field of view, but only when something that
+    affects it has changed (player tile, map, wall hack). Ray casting the
+    whole FOV every frame is wasted work now that we draw at 60 FPS while
+    the player stands still or glides between tiles.
     """
-    # Update what to lock camera on
-    config.CAMERA.update(config.PLAYER)
+    key = (id(config.MAP_INFO), id(config.FOV), config.PLAYER.x, config.PLAYER.y, config.WALL_HACK)
+    if key == _fov_state["key"]:
+        return
 
     if not config.WALL_HACK:
         config.FOV = fov.new_fov(config.MAP_INFO)
 
     fov.ray_casting(config.MAP_INFO, config.MAP_INFO.tile_array, config.FOV, config.PLAYER)
     fov.change_seen(config.MAP_INFO, config.MAP_INFO.tile_array, config.FOV)
+    _fov_state["key"] = (id(config.MAP_INFO), id(config.FOV), config.PLAYER.x, config.PLAYER.y, config.WALL_HACK)
+
+
+def update_game():
+    """
+    Updates camera and fov, then draws the game
+    """
+    # Update what to lock camera on
+    config.CAMERA.update(config.PLAYER)
+
+    _update_fov()
 
     draw.draw_game()
 
 
+def _after_floor_change():
+    """
+    Called after moving to another floor: stop any walking, snap the player
+    sprite and camera to the new spawn point and fade in from black.
+    """
+    reset_input_state()
+    invalidate_fov()
+    config.PARTICLE_LIST = []
+    config.PLAYER.snap_visual()
+    config.CAMERA.update(config.PLAYER)
+    draw.start_level_fade()
+
+
+def invalidate_fov():
+    """Forces the FOV to be recomputed on the next frame."""
+    _fov_state["key"] = None
+
+
 def move_char_auto(path, ignore=False):
     """
-    Moves current_group (player) according to path and draws character
-    with slight delay to show walking animation
-
-    Uses difference in current/old coord and new/destination coord
-    to find which direction to move
+    Starts walking the player along path. The walk happens one step per turn
+    inside the normal game loop (see process_player_input), so it glides at
+    the same speed as walking with the keyboard and can be interrupted by
+    pressing any movement key.
 
     Args:
         path (list): path to take
         ignore (boolean): if true, ignore monsters showing up in FOV and
             continue moving, else stop and prevent movement
     """
-    old_coord = (config.PLAYER.x, config.PLAYER.y)
-
     if len(path) == 0:
-        if not ignore:
-            # If enemy in FOV stop auto moving
-            # If wall hack on disregard
-            if _check_if_enemy_in_fov(config.GAME_DATA.creature_data["enemy"]):
-                return
-        update_creatures(config.GAME_DATA.creature_data, 0, 0)
-    else:
-        for coord in path:
-            # If key pressed stop auto moving
-            events = pygame.event.get()
-            for event in events:
-                if event.type == pygame.KEYDOWN:
-                    return
+        if not ignore and _check_if_enemy_in_fov(config.GAME_DATA.creature_data["enemy"]):
+            return
+        _request_step((0, 0))
+        return
 
-            if not ignore:
-                # If enemy in FOV stop auto moving
-                # If wall hack on disregard
-                if _check_if_enemy_in_fov(config.GAME_DATA.creature_data["enemy"]):
-                    return
-
-            # Move to next coord in path
-            dest_x = coord[0] - old_coord[0]
-            dest_y = coord[1] - old_coord[1]
-            update_creatures(config.GAME_DATA.creature_data, dest_x, dest_y)
-            old_coord = coord
-
-            update_game()
-            draw.draw_mouse()
-            config.CLOCK.tick(20)
-            pygame.display.flip()
+    _input["buffered"] = None
+    _input["auto_path"] = list(path)
+    _input["auto_ignore_enemies"] = ignore
 
 
 def auto_path(graph):
@@ -550,7 +867,7 @@ def auto_path(graph):
     else:
         start, goal = gamemap.find_closest_unseen_tile()
 
-    visited = graph.bfs(start, goal)
+    visited = graph.dijkstra(start, goal)
 
     if visited:
         path = config.PATHFINDING.find_path(start, goal, visited)
@@ -566,20 +883,23 @@ def cast_magic(spell_to_cast, line):
         spell_to_cast (fn_pointer): spell to cast
         line (List): List of coords for spell to travel
     """
-    spell_to_cast(config.PLAYER, line)
-    # TODO: maybe change this since if player has ai but cast fireball,
-    #       player would move + cast fireball at the same time
-    update_creatures(config.GAME_DATA.creature_data, 0, 0)
+    # Only spend the turn if the spell actually went off (enough MP)
+    if spell_to_cast(config.PLAYER, line) is not False:
+        take_player_turn(0, 0)
 
 
 def save_game():
     """
     Saves game to data/save.txt
     """
-    with open(SAVE_PATH, 'wb') as file:
+    # Write to a temp file first so a failed save never leaves a corrupt
+    # save.txt behind (which would then crash "Continue Journey")
+    tmp_path = SAVE_PATH + ".tmp"
+    with open(tmp_path, 'wb') as file:
         pickle.dump([config.CURRENT_FLOOR, config.TURN_COUNT,
                      config.MAP_INFO, config.PLAYER,
-                     config.GAME_DATA], file)
+                     config.GAME_DATA, config.BASE_SEED], file)
+    os.replace(tmp_path, SAVE_PATH)
 
 
 def load_game():
@@ -589,12 +909,13 @@ def load_game():
     Initializes camera and pathfinding
     """
     with open(SAVE_PATH, 'rb') as file:
-        config.CURRENT_FLOOR, \
-        config.TURN_COUNT, \
-        config.MAP_INFO, \
-        config.PLAYER, \
-        config.GAME_DATA = pickle.load(file)
+        saved = pickle.load(file)
+    config.CURRENT_FLOOR, config.TURN_COUNT, config.MAP_INFO, config.PLAYER, config.GAME_DATA = saved[:5]
+    if len(saved) > 5:  # older saves did not store the seed
+        config.BASE_SEED = saved[5]
 
     generate_camera()
 
     initialize_pathfinding()
+
+    _after_floor_change()

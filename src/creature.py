@@ -270,11 +270,16 @@ class Creature:
         total_damage = max(0, damage - self.total_blocked_damage)
         self.stat.hp -= total_damage
         game_text.add_game_message_to_print(
-            self.name_instance + " took " + str(total_damage) + " damage", RED)
-        game_text.add_game_message_to_print(
-            self.name_instance + "'s hp is at :" + str(self.stat.hp), WHITE)
+            self.name_instance + " took " + str(total_damage) + " damage (hp "
+            + str(max(0, self.stat.hp)) + "/" + str(self.stat.max_hp) + ")", RED)
 
         NumberParticle(self.x, self.y, total_damage, config.PARTICLE_LIST, RED)
+
+        # Visual feedback: flash the sprite, shake the screen if it's the player
+        if total_damage > 0:
+            self.owner.start_hit_flash()
+            if self.owner is config.PLAYER:
+                config.CAMERA.shake()
 
         if self.stat.hp <= 0 and self.killable:
             self.die()
@@ -288,6 +293,8 @@ class Creature:
         """
         game_text.add_game_message_to_print(
             self.name_instance + " is dead", BLUE)
+        # Leave a fading "ghost" of the sprite behind so it doesn't just pop out
+        FadeParticle(self.owner.image, self.owner.render_pos(), config.PARTICLE_LIST)
         config.GAME_DATA.creature_data[self.team].remove(self.owner)
 
     def move(self, dx, dy):
@@ -322,6 +329,13 @@ class Creature:
 
         self.owner.x += dx
         self.owner.y += dy
+
+        # Enemies wading into mud lose turns (flying creatures glide over it).
+        # The player's mud cost is handled by the game loop (game.take_player_turn).
+        if self.owner.ai and self.name_instance != "flying creature" and (dx or dy) \
+                and config.MAP_INFO.tile_array[self.owner.y][self.owner.x].type == HAZARD:
+            self.owner.stuck_turns = MUD_TURN_COST - 1
+            self.owner.move_scale = 2.0
 
     def _update_anim_status(self, dx, dy):
         """
@@ -360,6 +374,10 @@ class Creature:
         game_text.add_game_message_to_print(
             self.name_instance + " attacks " + target.creature.name_instance
             + " for " + str(damage) + " damage", WHITE)
+        # Melee "bump" towards the target (only for adjacent targets)
+        dx, dy = target.x - self.x, target.y - self.y
+        if max(abs(dx), abs(dy)) == 1:
+            self.owner.start_lunge(dx, dy)
         if target.creature.take_damage(damage):
             self.gain_exp(target)
             self.check_for_level_up()
@@ -390,5 +408,6 @@ class Creature:
         while self.stat.exp >= 100:
             self.stat.level += 1
             self.stat.exp -= 100
+            self.stat.level_up()
             game_text.add_game_message_to_print(
                 self.name_instance + " leveled up ", YELLOW)

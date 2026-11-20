@@ -26,12 +26,16 @@ class KnapsackItem:
 class KnapsackResult:
     """Encapsulates the solution from a Knapsack solver."""
     def __init__(self, selected_items=None, total_weight=0, total_value=0, 
-                 execution_time_ms=0.0, method_name=""):
+                 execution_time_ms=0.0, method_name="", dp_table=None, trace=None):
         self.selected_items = selected_items or []
         self.total_weight = total_weight
         self.total_value = total_value
         self.execution_time_ms = execution_time_ms
         self.method_name = method_name
+        # DP only: the full (n + 1) x (W + 1) table and the cells visited while
+        # reconstructing the answer [(i, w, took_item_i), ...] (for visualising)
+        self.dp_table = dp_table
+        self.trace = trace or []
 
 
 def solve_knapsack_dp(items, capacity):
@@ -66,9 +70,12 @@ def solve_knapsack_dp(items, capacity):
 
     # Backtrack to reconstruct the optimal item subset
     selected = []
+    trace = []
     w_remain = cap
     for i in range(n, 0, -1):
-        if dp[i][w_remain] != dp[i - 1][w_remain]:
+        took = dp[i][w_remain] != dp[i - 1][w_remain]
+        trace.append((i, w_remain, took))
+        if took:
             item = items[i - 1]
             selected.append(item)
             w_remain -= item.weight
@@ -83,7 +90,9 @@ def solve_knapsack_dp(items, capacity):
         total_weight=total_wt,
         total_value=total_val,
         execution_time_ms=(t1 - t0) * 1000.0,
-        method_name="Dynamic Programming (0/1)"
+        method_name="Dynamic Programming (0/1)",
+        dp_table=dp,
+        trace=trace
     )
 
 

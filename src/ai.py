@@ -2,6 +2,75 @@ from constant import *
 import config
 import random
 
+_NEIGHBOUR_DIRS = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)]
+
+
+def _is_walkable(x, y):
+    """
+    Returns:
+        True if tile (x, y) is inside the map and not a wall / obstacle
+    """
+    tiles = config.MAP_INFO.tile_array
+    if not (0 <= y < len(tiles) and 0 <= x < len(tiles[0])):
+        return False
+    return tiles[y][x].type not in (WALL, OBSTACLE)
+
+
+def _creature_at(x, y, ignore=None):
+    """
+    Returns:
+        The creature Entity standing on (x, y) (other than ignore), else None
+    """
+    for entity_list in config.GAME_DATA.creature_data.values():
+        for entity in entity_list:
+            if entity is not ignore and entity.x == x and entity.y == y:
+                return entity
+    return None
+
+
+def _octile(a, b):
+    dx, dy = abs(a[0] - b[0]), abs(a[1] - b[1])
+    return max(dx, dy) + 0.41421356 * min(dx, dy)
+
+
+def _wander(creature):
+    """
+    Idle or take one step onto a random open neighbouring tile.
+
+    Picking only open tiles (instead of a random direction that may be a
+    wall) stops wandering enemies from visibly twitching in place.
+    """
+    if random.random() < 0.5:
+        return
+    owner = creature.owner
+    options = [(dx, dy) for dx, dy in _NEIGHBOUR_DIRS
+               if _is_walkable(owner.x + dx, owner.y + dy)
+               and _creature_at(owner.x + dx, owner.y + dy, owner) is None]
+    if options:
+        creature.move(*random.choice(options))
+
+
+def _sidestep_towards(creature, goal):
+    """
+    Used when the shortest path is blocked by an ally: step onto a free
+    neighbouring tile that still gets strictly closer to the goal (if any),
+    so groups of enemies flow around each other instead of queueing.
+    """
+    owner = creature.owner
+    current = _octile((owner.x, owner.y), goal)
+    best, best_dist = [], current
+    for dx, dy in _NEIGHBOUR_DIRS:
+        nx, ny = owner.x + dx, owner.y + dy
+        if not _is_walkable(nx, ny) or _creature_at(nx, ny, owner) is not None:
+            continue
+        d = _octile((nx, ny), goal)
+        if d < best_dist - 1e-9:
+            best, best_dist = [(dx, dy)], d
+        elif best and abs(d - best_dist) < 1e-9:
+            best.append((dx, dy))
+    if best:
+        creature.move(*random.choice(best))
+
 
 def _calculate_change_in_position(diff):
     """
@@ -91,8 +160,6 @@ class ChaseAI:
     def __init__(self):
         self.owner = None
 
-    # TODO: make it so that enemies dont get block by other enemies
-    #       even though there is space to move around
     def take_turn(self):
         """
         Make creature move towards the player if in creature FOV,
@@ -105,18 +172,20 @@ class ChaseAI:
 
         # If player is not in enemy FOV wander
         if abs(diff_x) > PLAYER_FOV or abs(diff_y) > PLAYER_FOV:
-            creature.move(random.choice(
-                [0, 1, -1]), random.choice([0, 1, -1]))
+            _wander(creature)
         else:
             self._make_path_to_player(creature, player)
 
             if creature.current_path:
                 dest = creature.current_path.pop(0)
-                dest_x = dest[0] - creature.x
-                dest_y = dest[1] - creature.y
-                creature.move(dest_x, dest_y)
+                blocker = _creature_at(dest[0], dest[1], self.owner)
+                if blocker is not None and blocker.creature and blocker.creature.team == creature.team:
+                    # An ally is standing on the next tile of the shortest path
+                    _sidestep_towards(creature, (player.x, player.y))
+                else:
+                    creature.move(dest[0] - creature.x, dest[1] - creature.y)
             else:
-                creature.move(random.choice([0, 1, -1]), random.choice([0, 1, -1]))
+                _sidestep_towards(creature, (player.x, player.y))
 
     def _make_path_to_player(self, creature, player):
         """

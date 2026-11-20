@@ -60,6 +60,29 @@ def draw_text(display_surface, coord, text_color, text, text_bg_color=None, cent
     display_surface.blit(text_surface, text_rect)
 
 
+_TEXT_CACHE = {}
+_TEXT_CACHE_LIMIT = 512
+
+
+def render_cached(font, text, antialias, color, bg_color=None):
+    """
+    Renders text with font, reusing a previously rendered surface when the
+    same text/colour/font is drawn again (HUD + message log redraw the same
+    strings every frame, and font rendering is comparatively expensive).
+
+    Returns:
+        Surface: rendered text (do not modify it; copy first if needed)
+    """
+    key = (id(font), text, antialias, tuple(color), tuple(bg_color) if bg_color else None)
+    surface = _TEXT_CACHE.get(key)
+    if surface is None:
+        if len(_TEXT_CACHE) >= _TEXT_CACHE_LIMIT:
+            _TEXT_CACHE.clear()
+        surface = font.render(text, antialias, color, bg_color) if bg_color else font.render(text, antialias, color)
+        _TEXT_CACHE[key] = surface
+    return surface
+
+
 def _text_to_objects_helper(inc_text, inc_color, inc_bg_color):
     """
     Helper function for draw_text. Returns the text surface and rect
@@ -69,12 +92,7 @@ def _text_to_objects_helper(inc_text, inc_color, inc_bg_color):
         inc_color (color): color of text
         inc_bg_color (color): background color of text
     """
-    if inc_bg_color:
-        text_surface = FONT_DEBUG_MESSAGE.render(
-            inc_text, False, inc_color, inc_bg_color)
-    else:
-        text_surface = FONT_DEBUG_MESSAGE.render(
-            inc_text, False, inc_color, None )
+    text_surface = render_cached(FONT_DEBUG_MESSAGE, inc_text, False, inc_color, inc_bg_color)
     return text_surface, text_surface.get_rect()
 
 # Taken from https://stackoverflow.com/questions/32590131/pygame-blitting-text-with-an-escape-character-or-newline

@@ -1,4 +1,5 @@
 from functools import partial
+import random
 import sys
 
 import entity_generator
@@ -165,9 +166,10 @@ def main_menu():
 
             elif event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    config.PLAYER = entity_generator.generate_player(config.MAP_INFO.map_tree, 'knight')
+                    # Fresh run every time (previously a restart after dying
+                    # kept the old floor number, map and previous levels)
+                    game.new_game()
                     g = game.Game()
-                    game.populate_map()
                     g.run()
                     btn_continue.clickable = False
                 elif event.key == pygame.K_c:
@@ -178,9 +180,8 @@ def main_menu():
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if btn_new.rect.collidepoint(mouse_pos):
-                    config.PLAYER = entity_generator.generate_player(config.MAP_INFO.map_tree, 'knight')
+                    game.new_game()
                     g = game.Game()
-                    game.populate_map()
                     g.run()
                     btn_continue.clickable = False
                 elif btn_continue.rect.collidepoint(mouse_pos) and btn_continue.clickable:
@@ -381,6 +382,7 @@ def magic_targetting_menu(spell_to_cast):
         spell_to_cast (fn pointer):
     """
     magic_cast = True
+    line = []
     while magic_cast:
         events = pygame.event.get()
         for event in events:
@@ -861,7 +863,8 @@ def keys_menu():
                "x \n" \
                "Left mouse click \n" \
                "m \n" \
-               "t \n" \
+               "t (or just walk onto it) \n" \
+               "h / j / r \n" \
                "TAB \n" \
                "TAB + Movement keys \n" \
                "TAB + ENTER \n" \
@@ -893,6 +896,7 @@ def keys_menu():
                 "Move to mouse cursor \n" \
                 "Toggle minimap \n" \
                 "Pickup item \n" \
+                "Quick use: health / mana potion / teleport \n" \
                 "Toggle camera \n" \
                 "Move camera around \n" \
                 "Move to camera location \n" \
@@ -1027,6 +1031,10 @@ def lose_menu():
         game_text.draw_text(config.SURFACE_MAIN,
                             (CAMERA_WIDTH // 2, new_button.rect.midtop[1] - 100), WHITE,
                             "You lost", BLACK, center=True)
+        game_text.draw_text(config.SURFACE_MAIN,
+                            (CAMERA_WIDTH // 2, new_button.rect.midtop[1] - 60), (255, 215, 80),
+                            f"Reached floor {config.CURRENT_FLOOR}  -  {getattr(config.GAME_DATA, 'gold', 0)} gold banked",
+                            BLACK, center=True)
 
         mouse_x, mouse_y = pygame.mouse.get_pos()
 
@@ -1057,110 +1065,13 @@ def lose_menu():
 
 def knapsack_menu():
     """
-    Interactive 0/1 Knapsack Problem Optimizer:
-    Compares Dynamic Programming vs Greedy heuristic under carry-weight capacity constraint.
+    0/1 Knapsack loot planner on the player's real bag and nearby loot
+    (see knapsack_planner.py). Applying a plan takes a turn.
     """
-    from algorithms.knapsack import KnapsackItem, compare_knapsack
-
-    # Sample loot / relic vault pool
-    relic_pool = [
-        KnapsackItem("Iron Sword", 4, 12),
-        KnapsackItem("Knight Shield", 6, 18),
-        KnapsackItem("Dragon Armor", 12, 45),
-        KnapsackItem("Shadow Cloak", 3, 14),
-        KnapsackItem("Titan Maul", 14, 52),
-        KnapsackItem("Health Potion", 1, 5),
-        KnapsackItem("Mana Elixir", 1, 6),
-        KnapsackItem("Teleport Rune", 2, 10),
-        KnapsackItem("Crown of Kings", 5, 30),
-        KnapsackItem("Ring of Power", 1, 15)
-    ]
-
-    capacity = getattr(config, 'KNAPSACK_CAPACITY', 20)
-    running = True
-
-    while running:
-        config.SURFACE_MAIN.fill((18, 22, 32))
-        comp = compare_knapsack(relic_pool, capacity)
-
-        # Header
-        game_text.draw_text(config.SURFACE_MAIN, (CAMERA_WIDTH // 2, 35), YELLOW,
-                            "=== INVENTORY KNAPSACK OPTIMIZER (0/1 DP vs GREEDY) ===", BLACK, center=True)
-        game_text.draw_text(config.SURFACE_MAIN, (CAMERA_WIDTH // 2, 70), WHITE,
-                            f"Carry Weight Capacity: {capacity}  [Left/Right Arrow or -/+ to Adjust]", None, center=True)
-
-        col_w = CAMERA_WIDTH // 2 - 40
-        top_y = 110
-
-        # --- Left Column: Dynamic Programming ---
-        left_surf = pygame.Surface((col_w, 420), pygame.SRCALPHA)
-        left_surf.fill((28, 38, 55, 230))
-        pygame.draw.rect(left_surf, (0, 200, 255), (0, 0, col_w, 420), 2)
-        config.SURFACE_MAIN.blit(left_surf, (30, top_y))
-
-        game_text.draw_text(config.SURFACE_MAIN, (30 + col_w // 2, top_y + 20), CYAN,
-                            "DYNAMIC PROGRAMMING (0/1 OPTIMAL)", None, center=True)
-        game_text.draw_text(config.SURFACE_MAIN, (50, top_y + 55), WHITE,
-                            f"Total Value: {comp['dp_value']} Gold", None)
-        game_text.draw_text(config.SURFACE_MAIN, (50, top_y + 85), WHITE,
-                            f"Total Weight: {comp['dp_weight']} / {capacity}", None)
-        game_text.draw_text(config.SURFACE_MAIN, (50, top_y + 115), LIGHT_GREY,
-                            f"Time: {comp['dp_time_ms']:.4f} ms  | O(N * W)", None)
-
-        game_text.draw_text(config.SURFACE_MAIN, (50, top_y + 155), YELLOW, "Selected Items:", None)
-        y_it = top_y + 185
-        for item_name in comp['dp_items'][:8]:
-            game_text.draw_text(config.SURFACE_MAIN, (65, y_it), GREEN, f"- {item_name}", None)
-            y_it += 26
-
-        # --- Right Column: Greedy Heuristic ---
-        right_surf = pygame.Surface((col_w, 420), pygame.SRCALPHA)
-        right_surf.fill((38, 32, 28, 230))
-        pygame.draw.rect(right_surf, (255, 160, 50), (0, 0, col_w, 420), 2)
-        config.SURFACE_MAIN.blit(right_surf, (CAMERA_WIDTH // 2 + 10, top_y))
-
-        game_text.draw_text(config.SURFACE_MAIN, (CAMERA_WIDTH // 2 + 10 + col_w // 2, top_y + 20), (255, 180, 60),
-                            "GREEDY (VALUE/WEIGHT RATIO)", None, center=True)
-        game_text.draw_text(config.SURFACE_MAIN, (CAMERA_WIDTH // 2 + 30, top_y + 55), WHITE,
-                            f"Total Value: {comp['greedy_value']} Gold", None)
-        game_text.draw_text(config.SURFACE_MAIN, (CAMERA_WIDTH // 2 + 30, top_y + 85), WHITE,
-                            f"Total Weight: {comp['greedy_weight']} / {capacity}", None)
-        game_text.draw_text(config.SURFACE_MAIN, (CAMERA_WIDTH // 2 + 30, top_y + 115), LIGHT_GREY,
-                            f"Time: {comp['greedy_time_ms']:.4f} ms  | O(N log N)", None)
-
-        game_text.draw_text(config.SURFACE_MAIN, (CAMERA_WIDTH // 2 + 30, top_y + 155), YELLOW, "Selected Items:", None)
-        y_it = top_y + 185
-        for item_name in comp['greedy_items'][:8]:
-            game_text.draw_text(config.SURFACE_MAIN, (CAMERA_WIDTH // 2 + 45, y_it), (255, 200, 100), f"- {item_name}", None)
-            y_it += 26
-
-        # Bottom Summary Bar
-        ratio_pct = comp['greedy_competitive_ratio'] * 100.0
-        optimal_str = "OPTIMAL MATCH" if comp['optimal_reached'] else "GREEDY SUB-OPTIMAL"
-        opt_color = GREEN if comp['optimal_reached'] else RED
-
-        summary_text = f"Greedy Competitive Ratio: {ratio_pct:.1f}%  |  Status: {optimal_str}"
-        game_text.draw_text(config.SURFACE_MAIN, (CAMERA_WIDTH // 2, CAMERA_HEIGHT - 85), opt_color,
-                            summary_text, BLACK, center=True)
-        game_text.draw_text(config.SURFACE_MAIN, (CAMERA_WIDTH // 2, CAMERA_HEIGHT - 45), LIGHT_GREY,
-                            "Press [ESC] to Close  |  [+/-] to change capacity", None, center=True)
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
-            elif event.type == pygame.KEYDOWN:
-                if event.key in (pygame.K_ESCAPE, pygame.K_k):
-                    running = False
-                elif event.key in (pygame.K_RIGHT, pygame.K_EQUALS, pygame.K_PLUS):
-                    capacity = min(60, capacity + 2)
-                    config.KNAPSACK_CAPACITY = capacity
-                elif event.key in (pygame.K_LEFT, pygame.K_MINUS):
-                    capacity = max(4, capacity - 2)
-                    config.KNAPSACK_CAPACITY = capacity
-
-        config.CLOCK.tick(FPS)
-        pygame.display.flip()
+    import knapsack_planner
+    if knapsack_planner.knapsack_planner_menu(game.update_game):
+        game.take_player_turn(0, 0)
+    game.reset_input_state()
 
 
 def rune_puzzle_menu():

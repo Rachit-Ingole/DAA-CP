@@ -61,13 +61,20 @@ class Tile:
         return SPRITE_SIZE, SPRITE_SIZE
 
 
+class RoomTreeRoot:
+    """
+    Root node for RoomTreeAdapter. Defined at module level (not inside
+    RoomTreeAdapter.__init__) so that maps can be pickled when saving.
+    """
+    def __init__(self, room_list):
+        self.child_room_list = room_list
+        self.path_list = []
+
+
 class RoomTreeAdapter:
     """Adapter allowing DungeonFloor.rooms to conform to legacy BSP tree interface."""
     def __init__(self, rooms):
-        class Root:
-            def __init__(self, room_list):
-                self.child_room_list = room_list
-        self.root = Root(rooms)
+        self.root = RoomTreeRoot(rooms)
 
 
 class MapInfo:
@@ -135,14 +142,14 @@ def generate_map(map_array, seed=None):
     gen_type = getattr(config, 'DUNGEON_GEN_TYPE', 'MST')
 
     if gen_type == "MST":
-        floor = generate_rooms_mst(MAP_WIDTH, MAP_HEIGHT, seed=seed)
+        floor = generate_rooms_mst(MAP_WIDTH, MAP_HEIGHT, seed=seed, trace=True)
         for y in range(MAP_HEIGHT):
             for x in range(MAP_WIDTH):
                 map_array[y][x] = floor.grid[y][x]
         return RoomTreeAdapter(floor.rooms), floor
 
     elif gen_type == "BACKTRACKING":
-        floor = generate_recursive_backtracking(MAP_WIDTH, MAP_HEIGHT, seed=seed)
+        floor = generate_recursive_backtracking(MAP_WIDTH, MAP_HEIGHT, seed=seed, trace=True)
         for y in range(MAP_HEIGHT):
             for x in range(MAP_WIDTH):
                 map_array[y][x] = floor.grid[y][x]

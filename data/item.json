@@ -1,25 +1,39 @@
 {
   "red potion": {
     "heal": 10,
-    "desc": "Health potion \n \n Heal for 10 hp"
+    "desc": "Health potion \n \n Heal for 10 hp",
+    "weight": 1,
+    "value": 4
   },
   "blue potion": {
     "heal": 5,
-    "desc": "Mana potion \n \n Heal for 5 mp"
+    "desc": "Mana potion \n \n Heal for 5 mp",
+    "weight": 1,
+    "value": 3
   },
   "teleport scroll": {
-    "desc": "Teleport Scroll \n \n Teleports user"
+    "desc": "Teleport Scroll \n \n Teleports user",
+    "weight": 1,
+    "value": 6
   },
   "sword": {
-    "desc": "Sword \n \n A weak sword"
+    "desc": "Sword \n \n A weak sword",
+    "weight": 4,
+    "value": 8
   },
   "shield": {
-    "desc": "Shield \n \n A weak shield"
+    "desc": "Shield \n \n A weak shield",
+    "weight": 5,
+    "value": 7
   },
   "armor": {
-    "desc": "Armor \n \n A weak armor"
+    "desc": "Armor \n \n A weak armor",
+    "weight": 7,
+    "value": 10
   },
   "chest": {
-    "desc": "Chest \n \n Full of treasure"
+    "desc": "Chest \n \n Full of treasure",
+    "weight": 6,
+    "value": 100
   }
 }
