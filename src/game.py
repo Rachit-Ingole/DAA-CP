@@ -17,6 +17,7 @@ import particle
 import relics
 import generation_replay
 import item as item_module
+import dungeon_features
 
 pygame.font.init()
 
@@ -83,6 +84,13 @@ def move_turn_cost(x, y, player=None):
     return cost
 
 
+def _enemies_act():
+    """Every enemy takes one turn (iterating a copy: enemies can die mid-turn)."""
+    for enemy in list(config.GAME_DATA.creature_data["enemy"]):
+        if enemy in config.GAME_DATA.creature_data["enemy"]:
+            enemy.update(0, 0)
+
+
 def _run_extra_enemy_turn():
     """Enemies act while the player is still wading / staggering."""
     for enemy in list(config.GAME_DATA.creature_data["enemy"]):
@@ -103,16 +111,34 @@ def take_player_turn(dx, dy):
     player = config.PLAYER
     old = (player.x, player.y)
     target = (player.x + dx, player.y + dy)
+    now = pygame.time.get_ticks()
     cost = 1
     if (dx or dy) and 0 <= target[1] < config.MAP_INFO.tile_height and 0 <= target[0] < config.MAP_INFO.tile_width:
+        # Bumping a locked door opens it if we hold its key; otherwise no turn passes
+        if config.MAP_INFO.tile_array[target[1]][target[0]].type == DOOR:
+            if not dungeon_features.try_open_door(*target):
+                cancel_auto_path()
+                _input["next_turn_at"] = now + 250
+                return False
         cost = move_turn_cost(*target)
         # Glide slower when the step is expensive (set before the move so the
         # tween picks it up)
         player.move_scale = min(2.2, 1.0 + 0.6 * (cost - 1))
 
-    update_creatures(config.GAME_DATA.creature_data, dx, dy)
+    # The player acts first...
+    player.update(dx, dy)
     moved = (player.x, player.y) != old
-    now = pygame.time.get_ticks()
+    if not moved:
+        cost = 1
+    # ...keys / shrines / rifts on the new tile (a rift moves the player)...
+    granted = dungeon_features.on_player_entered(player.x, player.y) if moved else 0
+    # ...then the enemies, unless banked free turns pay for this turn
+    owed = dungeon_features.spend_free_turns(cost)
+    if owed > 0:
+        _enemies_act()
+        owed -= 1
+    config.TURN_COUNT += 1
+    dungeon_features.add_free_turns(granted)
 
     if not moved:
         player.move_scale = 1.0
@@ -123,7 +149,7 @@ def take_player_turn(dx, dy):
         pick_up_items_here(announce_empty=False, automatic=True)
     _announce_vault()
 
-    extra = cost - 1
+    extra = owed
     if extra:
         _input["pending_enemy_turns"] += extra
         _input["enemy_turn_at"] = now + EXTRA_ENEMY_TURN_MS
@@ -205,6 +231,11 @@ def _step_auto_path():
     if not _input["auto_ignore_enemies"] and _check_if_enemy_in_fov(config.GAME_DATA.creature_data["enemy"]):
         cancel_auto_path()
         return
+    while path and path[0] == (config.PLAYER.x, config.PLAYER.y):
+        path.pop(0)      # already here (eg landed by a rift)
+    if not path:
+        cancel_auto_path()
+        return
     target = path.pop(0)
     dx, dy = target[0] - config.PLAYER.x, target[1] - config.PLAYER.y
     if max(abs(dx), abs(dy)) != 1:
@@ -218,6 +249,7 @@ def _step_auto_path():
 
 def cancel_auto_path():
     _input["auto_path"] = []
+    config.ROUTE_PLAN = None
 
 
 # ============================================================================
@@ -399,6 +431,20 @@ def _handle_mouse_event_click(event):
     Args:
         event (Event): Event to handle
     """
+    if event.button == 3 or (event.button == 1 and pygame.key.get_mods() & pygame.KMOD_SHIFT):
+        goal = config.CAMERA.get_mouse_coord()
+        tile = config.MAP_INFO.tile_array[goal[1]][goal[0]]
+        if tile.seen and tile.type not in (WALL, OBSTACLE, DOOR):
+            if event.button == 3:
+                path = dungeon_features.plan_rift_route(goal)
+            else:
+                path = dungeon_features.plan_safe_route(goal)
+            if path:
+                plan = config.ROUTE_PLAN
+                move_char_auto(path, True)
+                config.ROUTE_PLAN = plan
+        return
+
     if event.button == 1:
         # Check if button clicked
         mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -412,7 +458,7 @@ def _handle_mouse_event_click(event):
         move_x, move_y = config.CAMERA.get_mouse_coord()
         tile = config.MAP_INFO.tile_array[move_y][move_x]
 
-        if not tile.seen or tile.type in (WALL, OBSTACLE):
+        if not tile.seen or tile.type in (WALL, OBSTACLE, DOOR):
             return
 
         start = (config.PLAYER.x, config.PLAYER.y)
@@ -442,6 +488,16 @@ def _handle_keyboard_event(event):
     # Mini_map
     elif event.key == pygame.K_m:
         toggle_minimap()
+
+    # CS3101: multi-source danger map overlay
+    elif event.key == pygame.K_n:
+        config.SHOW_DANGER_MAP = not config.SHOW_DANGER_MAP
+        if config.SHOW_DANGER_MAP:
+            dmap = dungeon_features.current_danger_map()
+            game_text.add_game_message_to_print(
+                f"Danger map: turns until the nearest enemy can reach each tile - one multi-source "
+                f"search from {dmap.sources} enemies ({dmap.nodes} nodes, {dmap.time_ms:.2f} ms)",
+                (255, 140, 90))
 
     # Pick up item(s) on this tile (only costs a turn if something was picked up)
     elif event.key == pygame.K_t:
@@ -696,9 +752,11 @@ def update_creatures(creature_dict, dx, dy):
         dx (int): x to move player by
         dy (int): y to move player by
     """
-    for team in creature_dict:
-        for entity in config.GAME_DATA.creature_data[team]:
-            entity.update(dx, dy)
+    for entity in list(config.GAME_DATA.creature_data["player"]):
+        entity.update(dx, dy)
+    # Banked free turns (shrines / rifts) freeze the enemies for this turn
+    if dungeon_features.spend_free_turns(1) > 0:
+        _enemies_act()
     config.TURN_COUNT += 1
 
 
@@ -728,6 +786,12 @@ def populate_map():
     else:
         config.PLAYER.x, config.PLAYER.y = entity_generator.generate_player_spawn(config.MAP_INFO.map_tree)
 
+    # Locks + keys, shrines and rifts (changes tiles, so rebuild the graph)
+    floor_seed = getattr(config, 'BASE_SEED', 1337) + config.CURRENT_FLOOR * 10007
+    dungeon_features.decorate_floor(config.MAP_INFO, (config.PLAYER.x, config.PLAYER.y),
+                                    config.CURRENT_FLOOR, floor_seed)
+    initialize_pathfinding()
+
     config.GAME_DATA.creature_data["enemy"] = entity_generator.generate_enemies(config.MAP_INFO.map_tree)
 
     config.GAME_DATA.item_data = entity_generator.generate_items(config.MAP_INFO.map_tree)
@@ -741,6 +805,7 @@ def populate_map():
     config.MAP_INFO.vault_room, vault_relics = entity_generator.generate_vault(config.MAP_INFO.map_tree)
     config.MAP_INFO.vault_announced = False
     config.GAME_DATA.item_data.extend(vault_relics)
+    dungeon_features.announce_floor_features()
 
 
 def _generate_new_map():
@@ -823,6 +888,8 @@ def _after_floor_change():
     """
     reset_input_state()
     invalidate_fov()
+    config.ROUTE_PLAN = None
+    config.GAME_DATA.free_turns = 0
     config.PARTICLE_LIST = []
     config.PLAYER.snap_visual()
     config.CAMERA.update(config.PLAYER)

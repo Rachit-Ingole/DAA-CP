@@ -8,6 +8,12 @@ Performs automated, repeatable benchmarks for:
 3. Procedural Dungeon Generation: Recursive Backtracking vs Room + MST.
 4. Optimization: 0/1 Knapsack Dynamic Programming vs Greedy Heuristic
    (random instances + realistic treasure vaults).
+5. Locked doors: Tarjan articulation points + vertex cuts + Kahn's topological sort.
+6. Negative weights: Bellman-Ford vs textbook Dijkstra, negative-cycle sealing.
+7. Danger map: one multi-source Dijkstra vs k single-source searches.
+
+Run only the map-feature sections (5-7) and update just their CSV rows:
+    python benchmark_runner.py --only locks,negative,danger
 
 Exports comprehensive results to benchmark_results.csv.
 Can be executed completely headlessly in terminal.
@@ -367,18 +373,210 @@ def export_results_to_csv(*datasets, output_file="benchmark_results.csv"):
     print(f"\n[+] Successfully exported {len(all_rows)} benchmark data records to: {output_path}")
 
 
+# ============================================================================
+# Map features: locks & keys, negative weights, danger map
+# ============================================================================
+def _feature_floors(seeds):
+    for seed in seeds:
+        yield "Rooms + MST", seed, generate_rooms_mst(35, 35, seed=seed)
+        yield "Recursive Backtracking", seed, generate_recursive_backtracking(35, 35, seed=seed)
+
+
+def benchmark_locks(seeds=range(1, 51), n_locks=3):
+    """
+    Locked doors: how many locks fit, how often the exit is locked, cost of
+    Tarjan + vertex cuts + Kahn, and a ground-truth solvability check.
+    """
+    from algorithms import locks as lock_alg
+    print("\n" + "=" * 75)
+    print(" [5] LOCKED DOORS & KEYS (Tarjan articulation points + vertex cuts + Kahn)")
+    print("=" * 75)
+    results = []
+    for gen, seed, floor in _feature_floors(seeds):
+        grid = [list(r) for r in floor.grid]
+        plan = lock_alg.plan_locks(grid, floor.spawn_pos, floor.exit_pos, random.Random(seed), n_locks,
+                                   rooms=[r.coords for r in floor.rooms])
+        exit_ok, all_open, rounds = lock_alg.simulate_unlock(grid, floor.spawn_pos, plan.locks, floor.exit_pos)
+        results.append({
+            "benchmark_category": "LockAndKey", "algorithm": gen, "grid_size": "35x35", "seed": seed,
+            "walkable_tiles": plan.walkable_count, "articulation_points": plan.articulation_count,
+            "doorway_candidates": plan.doorway_candidates, "room_seal_candidates": plan.room_candidates,
+            "locks_placed": len(plan.locks),
+            "room_seals": sum(1 for lk in plan.locks if lk["kind"] == "room seal"),
+            "exit_locked": any(lk["guards_exit"] for lk in plan.locks),
+            "dependency_edges": len(plan.edges), "locks_dropped": plan.dropped,
+            "tarjan_ms": round(plan.tarjan_ms, 4), "kahn_ms": round(plan.kahn_ms, 4),
+            "runtime_ms": round(plan.total_ms, 4),
+            "is_valid": plan.solvable and exit_ok and all_open,
+        })
+    print(f"{'Generator':<24} | {'Locks':>5} | {'Exit locked':>11} | {'Cut vtx':>7} | "
+          f"{'Tarjan ms':>9} | {'Total ms':>8} | {'Solvable':>8}")
+    print("-" * 75)
+    for gen in ("Rooms + MST", "Recursive Backtracking"):
+        rows = [r for r in results if r["algorithm"] == gen]
+        n = len(rows)
+        print(f"{gen:<24} | {sum(r['locks_placed'] for r in rows) / n:>5.2f} | "
+              f"{100.0 * sum(r['exit_locked'] for r in rows) / n:>10.0f}% | "
+              f"{sum(r['articulation_points'] for r in rows) / n:>7.1f} | "
+              f"{sum(r['tarjan_ms'] for r in rows) / n:>9.2f} | {sum(r['runtime_ms'] for r in rows) / n:>8.1f} | "
+              f"{100.0 * sum(r['is_valid'] for r in rows) / n:>7.0f}%")
+    return results
+
+
+def benchmark_negative_weights(seeds=range(1, 51)):
+    """
+    Shrines (-1) and time rifts (1 - R): how often a rift forms a negative
+    cycle, Bellman-Ford's real cost (passes, relaxations) and how often
+    textbook Dijkstra returns wrong distances on the same graph.
+    """
+    from algorithms import locks as lock_alg
+    from algorithms import negative_weights as negw
+    print("\n" + "=" * 75)
+    print(" [6] NEGATIVE EDGE WEIGHTS (Bellman-Ford vs textbook Dijkstra, negative cycles)")
+    print("=" * 75)
+    results = []
+    for gen, seed, floor in _feature_floors(seeds):
+        rng = random.Random(seed)
+        grid = [list(r) for r in floor.grid]
+        plan = lock_alg.plan_locks(grid, floor.spawn_pos, floor.exit_pos, rng, 2,
+                                   rooms=[r.coords for r in floor.rooms])
+        for lk in plan.locks:
+            for x, y in lk["tiles"]:
+                grid[y][x] = 'D'
+        shrines, rifts = negw.place_shrines_and_rifts(
+            grid, floor.spawn_pos, rng, region_of=lambda t: plan.stage.get(t),
+            reserved=[lk["key"] for lk in plan.locks])
+        t0 = time.perf_counter()
+        reports = negw.seal_paradoxes(grid, shrines, rifts)
+        seal_ms = (time.perf_counter() - t0) * 1000.0
+        graph = negw.TurnGraph(grid, shrines, rifts)
+        src = graph.index[floor.spawn_pos]
+        bf = negw.bellman_ford(graph, src)
+        dj, settled, dj_ms = negw.dijkstra_textbook(graph, src)
+        errors = [dj[i] - bf.dist[i] for i in range(graph.n) if dj[i] - bf.dist[i] > 1e-9]
+        results.append({
+            "benchmark_category": "NegativeWeights", "algorithm": gen, "grid_size": "35x35", "seed": seed,
+            "nodes": graph.n, "edges": len(graph.edges), "shrines": len(shrines), "rifts": len(rifts),
+            "rifts_sealed": len(reports),
+            "cycle_weights": ";".join(str(r["weight"]) for r in reports),
+            "seal_ms": round(seal_ms, 4),
+            "bf_passes": bf.iterations, "bf_relaxations": bf.relaxations, "runtime_ms": round(bf.time_ms, 4),
+            "dijkstra_ms": round(dj_ms, 4), "dijkstra_wrong_tiles": len(errors),
+            "dijkstra_max_error": max(errors) if errors else 0,
+        })
+    print(f"{'Generator':<24} | {'V':>4} | {'E':>5} | {'BF passes':>9} | {'BF ms':>6} | {'Dijk ms':>7} | "
+          f"{'Dijk wrong':>10} | {'Sealed':>6}")
+    print("-" * 85)
+    for gen in ("Rooms + MST", "Recursive Backtracking"):
+        rows = [r for r in results if r["algorithm"] == gen]
+        n = len(rows)
+        print(f"{gen:<24} | {sum(r['nodes'] for r in rows) / n:>4.0f} | {sum(r['edges'] for r in rows) / n:>5.0f} | "
+              f"{sum(r['bf_passes'] for r in rows) / n:>9.1f} | {sum(r['runtime_ms'] for r in rows) / n:>6.2f} | "
+              f"{sum(r['dijkstra_ms'] for r in rows) / n:>7.2f} | "
+              f"{100.0 * sum(r['dijkstra_wrong_tiles'] > 0 for r in rows) / n:>9.0f}% | "
+              f"{100.0 * sum(r['rifts_sealed'] > 0 for r in rows) / n:>5.0f}%")
+    total_rifts = sum(r["rifts"] for r in results)
+    sealed = sum(r["rifts_sealed"] for r in results)
+    wrong_rows = [r for r in results if r["dijkstra_wrong_tiles"]]
+    print(f" {sealed}/{total_rifts} rifts sealed ({100.0 * sealed / max(1, total_rifts):.1f}%). When Dijkstra is "
+          f"wrong it is wrong on {sum(r['dijkstra_wrong_tiles'] for r in wrong_rows) / max(1, len(wrong_rows)):.1f} "
+          f"tiles, by up to {max((r['dijkstra_max_error'] for r in results), default=0):g} turns.")
+    return results
+
+
+def benchmark_danger_map(seeds=range(1, 31), enemy_counts=(4, 8, 16)):
+    """
+    One multi-source Dijkstra vs k separate single-source Dijkstras (the
+    answers are checked to be identical).
+    """
+    from algorithms import danger_map as dmap
+    print("\n" + "=" * 75)
+    print(" [7] DANGER MAP (one multi-source Dijkstra vs k single-source Dijkstras)")
+    print("=" * 75)
+    results = []
+    for seed in seeds:
+        floor = generate_rooms_mst(35, 35, seed=seed)
+        grid = floor.grid
+        walkable = [(x, y) for y in range(35) for x in range(35) if grid[y][x] not in ('1', 'O')]
+        for k in enemy_counts:
+            sources = random.Random(seed * 100 + k).sample(walkable, k)
+            t0 = time.perf_counter()
+            multi, multi_nodes = dmap.multi_source_dijkstra(grid, sources)
+            multi_ms = (time.perf_counter() - t0) * 1000.0
+            t0 = time.perf_counter()
+            singles = [dmap.multi_source_dijkstra(grid, [s]) for s in sources]
+            single_ms = (time.perf_counter() - t0) * 1000.0
+            same = all(multi.get(t, dmap.INF) == min(d.get(t, dmap.INF) for d, _ in singles) for t in walkable)
+            results.append({
+                "benchmark_category": "DangerMap", "algorithm": "Multi-source Dijkstra", "grid_size": "35x35",
+                "seed": seed, "enemies": k, "nodes_visited": multi_nodes, "runtime_ms": round(multi_ms, 4),
+                "separate_nodes": sum(n for _, n in singles), "separate_ms": round(single_ms, 4),
+                "identical": same,
+            })
+    print(f"{'Enemies':>7} | {'Multi nodes':>11} | {'Multi ms':>8} | {'k searches nodes':>16} | "
+          f"{'k searches ms':>13} | {'Speed-up':>8} | {'Same':>5}")
+    print("-" * 85)
+    for k in enemy_counts:
+        rows = [r for r in results if r["enemies"] == k]
+        n = len(rows)
+        mm = sum(r["runtime_ms"] for r in rows) / n
+        sm = sum(r["separate_ms"] for r in rows) / n
+        print(f"{k:>7} | {sum(r['nodes_visited'] for r in rows) / n:>11.0f} | {mm:>8.2f} | "
+              f"{sum(r['separate_nodes'] for r in rows) / n:>16.0f} | {sm:>13.2f} | {sm / mm:>7.1f}x | "
+              f"{100.0 * sum(r['identical'] for r in rows) / n:>4.0f}%")
+    return results
+
+
+FEATURE_SECTIONS = {
+    "locks": ("LockAndKey", benchmark_locks),
+    "negative": ("NegativeWeights", benchmark_negative_weights),
+    "danger": ("DangerMap", benchmark_danger_map),
+}
+
+
+def merge_into_csv(new_rows, categories, output_file="benchmark_results.csv"):
+    """Replaces only the given categories' rows in an existing CSV, keeping the rest."""
+    output_path = os.path.abspath(output_file)
+    old_rows = []
+    if os.path.exists(output_path):
+        with open(output_path, newline='', encoding='utf-8') as f:
+            old_rows = [r for r in csv.DictReader(f) if r.get("benchmark_category") not in categories]
+    export_results_to_csv(old_rows, new_rows, output_file=output_file)
+
+
 def main():
+    # python benchmark_runner.py --only locks,negative,danger
+    #   re-runs just those sections and replaces only their rows in the CSV
+    only = None
+    if "--only" in sys.argv:
+        only = sys.argv[sys.argv.index("--only") + 1].split(",")
+        unknown = [s for s in only if s not in FEATURE_SECTIONS]
+        if unknown:
+            sys.exit(f"Unknown section(s) {unknown}; choose from {sorted(FEATURE_SECTIONS)}")
+
     print("=" * 75)
     print(" INFINITE DUNGEON — CS3101 EMPIRICAL BENCHMARK SUITE")
     print("=" * 75)
+
+    if only:
+        rows = []
+        for name in only:
+            rows += FEATURE_SECTIONS[name][1]()
+        merge_into_csv(rows, {FEATURE_SECTIONS[n][0] for n in only})
+        print("\n[+] Selected benchmark sections completed.")
+        return
 
     pf_results = benchmark_pathfinding()
     chase_results = benchmark_enemy_chases()
     gen_results = benchmark_dungeon_generators()
     knapsack_results = benchmark_knapsack()
     vault_results = benchmark_vault_knapsack()
+    lock_results = benchmark_locks()
+    negative_results = benchmark_negative_weights()
+    danger_results = benchmark_danger_map()
 
     export_results_to_csv(pf_results, chase_results, gen_results, knapsack_results, vault_results,
+                          lock_results, negative_results, danger_results,
                           output_file="benchmark_results.csv")
     print("\n[+] Benchmark suite execution completed successfully.")
 

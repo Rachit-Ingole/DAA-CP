@@ -1,4 +1,4 @@
-# 6. Engineering — Making It Playable
+# 9. Engineering — Making It Playable
 
 ## Slide: Turn-Based Logic, Smooth Presentation
 
@@ -6,6 +6,8 @@
 - Everything is animated on top: sprites **glide** between tiles, attacks lunge, damage flashes, numbers float, the camera follows smoothly, spells fly at 60 FPS.
 - Slow moves look slow: wading into mud or carrying too much makes the glide longer, and the enemies' extra turns play out one step at a time.
 - Hold a key to keep walking; walk onto items to pick them up; `H` / `J` / `R` quick-use potions and scrolls.
+- Doors, keys, shrines and rifts are drawn in code — no new art files, the original sprites are untouched.
+- Free turns from shrines and rifts are real: enemies are tinted blue and skip their turns while banked free turns pay for your moves.
 
 ![Pickup feedback and the HUD (bag weight, gold, quick bar)](images/pickup-and-hud.png)
 
@@ -23,8 +25,8 @@
 ## Slide: Reproducibility and Testing
 
 - Seeded generation: each run rolls a seed (shown in `F1`); `FIXED_SEED` replays a run exactly; the seed is stored in save files.
-- **21 unit tests** — traversal, all four searches (including a test that Greedy Best-First is *not* optimal), heuristic admissibility, generator validity and seed reproducibility, double-sweep exit placement, Kruskal trace properties, knapsack DP / greedy / reconstruction, backtracking.
-- **Benchmark suite** — 3,532 records in `benchmark_results.csv`, regenerated with one command.
+- **33 unit tests** — traversal, all four searches (including a test that Greedy Best-First is *not* optimal), heuristic admissibility, generator validity and seed reproducibility, double-sweep exit placement, Kruskal trace properties, knapsack DP / greedy / reconstruction, backtracking; plus Tarjan's cut vertices against brute-force BFS, lock plans against a flood-fill simulation, Kahn detecting a cycle, Bellman–Ford against Floyd–Warshall, a case where Dijkstra provably fails, negative-cycle detection and sealing, multi-source search against k single searches, and the safe-route guarantee.
+- **Benchmark suite** — 3,822 records in `benchmark_results.csv`, regenerated with one command.
 
 ## Speaker Notes
 

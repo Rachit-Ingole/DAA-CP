@@ -8,7 +8,10 @@
   - each enemy type hunts with a **different search algorithm** (BFS, Greedy Best-First, A\*, Dijkstra);
   - mud has **edge weight 3** and really costs 3 turns;
   - your bag is a **0/1 knapsack**, and every floor has a treasure vault with more loot than you can carry;
-  - a **backtracking** solver guarantees the rune puzzle is solvable.
+  - a **backtracking** solver guarantees the rune puzzle is solvable;
+  - locked doors sit on **cut vertices / vertex cuts** (Tarjan) and **Kahn's topological sort** proves an unlock order exists;
+  - healing shrines and time rifts are **negative edges**: right-click routes use **Bellman–Ford**, which also seals rifts that would form a **negative cycle**;
+  - `N` shows a **multi-source Dijkstra** danger map, and Shift + click walks the safest route.
 - An observation mode (`F1`) and a step-by-step **generation replay** (`B`) let you watch the algorithms run.
 
 ![Enemies with their algorithms in F1 mode](images/enemy-algorithms-f1.png)
@@ -28,6 +31,12 @@
 | You click to walk somewhere | Dijkstra (avoids mud) | $O((V + E)\log V)$ |
 | You choose what to carry | 0/1 Knapsack DP vs greedy | $O(N \cdot W)$ vs $O(N \log N)$ |
 | You open the rune vault | Backtracking with forward pruning | $O(M^N)$ worst case, heavily pruned |
+| New floor: where can a door go? | Tarjan's articulation points + room vertex cuts | $O(V + E)$ |
+| New floor: is there an unlock order? | Kahn's topological sort (+ replay check) | $O(L + D)$, $L \le 3$ locks |
+| New floor: seal paradox rifts | Bellman–Ford negative-cycle detection | $O(V \cdot E)$ worst case |
+| You right-click a destination | Bellman–Ford (shrine / rift edges are negative) | $O(V \cdot E)$ worst case |
+| You press `N` | Multi-source Dijkstra + multi-source BFS | $O((V + E)\log V)$, any number of enemies |
+| You Shift + click a destination | Dijkstra with a danger penalty | $O((V + E)\log V)$ |
 
 ## Slide: Architecture
 
@@ -39,6 +48,9 @@ flowchart LR
         PF[pathfinding_algorithms.py<br/>BFS, Dijkstra, A*, Greedy]
         KS[knapsack.py<br/>DP + table + trace, greedy]
         BT[backtracking_puzzle.py]
+        LK[locks.py<br/>Tarjan, vertex cuts, Kahn]
+        NW[negative_weights.py<br/>Bellman-Ford, neg. cycles]
+        DM[danger_map.py<br/>multi-source Dijkstra / BFS]
     end
     subgraph Game["src (game)"]
         MAP[gamemap.py] --> GEN
@@ -49,8 +61,12 @@ flowchart LR
         LOOP[game.py<br/>turns, input, terrain costs] --> AI
         LOOP --> PLAN
         LOOP --> REPLAY
+        FEAT[dungeon_features.py<br/>doors, keys, shrines, rifts, planners] --> LK
+        FEAT --> NW
+        FEAT --> DM
+        LOOP --> FEAT
     end
-    TESTS[tests/test_algorithms.py<br/>21 tests] --> Algorithms
+    TESTS[tests/test_algorithms.py<br/>33 tests] --> Algorithms
     BENCH[benchmark_runner.py] --> Algorithms
 ```
 
@@ -59,4 +75,4 @@ flowchart LR
 - Start from the base project: we took an open-source Pygame roguelike (credited in `ATTRIBUTION.md`) with sprites, animation, FOV and inventory, and replaced or added every algorithmic system. All the art is unchanged.
 - The algorithms in `src/algorithms/` are pure Python with no Pygame dependency. That is what lets us unit-test and benchmark them headlessly. The game calls into them.
 - Emphasise the design principle: **each algorithm changes what the player experiences.** The knapsack is the player's bag; the edge weight of mud is the number of turns it costs; the slime's BFS is why it gets stuck in mud.
-- Mention numbers early to set up the results section: A\* expands about 4× fewer nodes than Dijkstra in chases with identical answers; greedy loses gold in 55 % of treasure vaults.
+- Mention numbers early to set up the results section: A\* expands about 4× fewer nodes than Dijkstra in chases with identical answers; greedy loses gold in 55 % of treasure vaults; textbook Dijkstra gets distances wrong on up to half the floors once shrines and rifts add negative edges.

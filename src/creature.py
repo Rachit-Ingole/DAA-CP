@@ -313,7 +313,7 @@ class Creature:
 
         if not self.walk_through_tile:
             # check to see if entity collided with wall or obstacle and if so don't move
-            if config.MAP_INFO.tile_array[self.y + dy][self.x + dx].type in (WALL, OBSTACLE):
+            if config.MAP_INFO.tile_array[self.y + dy][self.x + dx].type in (WALL, OBSTACLE, DOOR):
                 return
 
         if self.team:

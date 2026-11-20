@@ -1,4 +1,4 @@
-# 7. Results
+# 10. Results
 
 All numbers come from `python benchmark_runner.py` (Python 3.12.8, pygame-ce 2.5.8, Windows 11). Full tables and methodology are in [`../BENCHMARKS.md`](../BENCHMARKS.md).
 
@@ -34,8 +34,36 @@ Whole floors, spawn → exit (35×35): Dijkstra 320.6 nodes, A\* 153.6 (identica
 
 **Takeaway**: greedy looks fine on loose instances and fails on tight ones — DP costs 0.12 ms per vault and is always optimal.
 
+## Slide: Locked Doors
+
+| 35×35, 50 floors each | Locks placed | Exit locked | Tarjan | Whole plan | Solvable |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| Rooms + MST | 2.90 | 86 % | 6.7 ms | 74 ms | 100 % |
+| Recursive Backtracking | 1.36 | 0 % | 15.4 ms | 75 ms | 100 % |
+
+**Takeaway**: generalising from cut vertices to vertex cuts (room seals) is what makes locks work on room floors.
+
+## Slide: Negative Weights
+
+| 35×35, 50 floors each | V | Bellman–Ford passes | BF time | Dijkstra time | Dijkstra wrong | Rift sealed |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Rooms + MST | 343 | 13.6 | 8.7 ms | 0.6 ms | 18 % of floors | 46 % of floors |
+| Recursive Backtracking | 692 | 26.7 | 34.1 ms | 2.0 ms | 48 % of floors | 20 % of floors |
+
+**Takeaway**: Bellman–Ford is ~15× slower here but always right; early exit needs ≈ 14–27 passes instead of $V - 1$.
+
+## Slide: Danger Map
+
+| Enemies | Multi-source | k separate searches | Speed-up |
+| :---: | :---: | :---: | :---: |
+| 4 / 8 / 16 | 3.9 / 3.4 / 3.8 ms | 14.9 / 29.1 / 59.0 ms | 3.9× / 8.5× / 15.7× |
+
+**Takeaway**: one search answers "nearest enemy" for every tile no matter how many enemies there are.
+
 ## Speaker Notes
 
 - Timings in the whole-floor and generation tables include `tracemalloc` overhead (we measure peak memory at the same time), so compare within a table rather than quoting absolute milliseconds as "the speed of Python A\*".
 - If someone asks why BFS has a lower "cost" in the whole-floor table of BENCHMARKS.md: that column is its step count, since BFS doesn't know about weights. The chase table re-measures every path with the real terrain weights.
 - Strongest single slide if time is short: the chase table — four algorithms, one game, clear trade-off between work and correctness.
+- The lock, negative-weight and danger-map numbers come from `python benchmark_runner.py --only locks,negative,danger`, which replaces just those rows in the CSV (the original 3,532 records are untouched).
+- "Dijkstra wrong" is measured from the spawn with every door still locked, i.e. the graph the player actually plans on at the start of a floor.

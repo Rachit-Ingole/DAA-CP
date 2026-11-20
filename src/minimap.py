@@ -16,7 +16,8 @@ def _terrain_surface(map_info):
     This reads the tile array directly so it works for every generator
     (MST, Recursive Backtracking, BSP) and for maps loaded from file.
     """
-    key = (id(map_info), len(map_info.unseen_tiles), getattr(config, 'FULL_MAP_VISIBLE', False))
+    key = (id(map_info), len(map_info.unseen_tiles), getattr(config, 'FULL_MAP_VISIBLE', False),
+           getattr(map_info, 'feature_version', 0))
     if _cache["key"] == key:
         return _cache["surface"]
 
@@ -36,6 +37,12 @@ def _terrain_surface(map_info):
                 colour = (235, 190, 90) if t == DOWNSTAIR else BROWN
             elif t == HAZARD:
                 colour = (120, 85, 50)
+            elif t == DOOR:
+                colour = (235, 200, 90)
+            elif t == SHRINE:
+                colour = (120, 240, 170)
+            elif t == PORTAL:
+                colour = (190, 110, 255)
             elif t == OBSTACLE:
                 colour = (95, 95, 110)
             else:
@@ -63,6 +70,11 @@ def draw_minimap():
     for item in config.GAME_DATA.item_data:
         if map_info.tile_array[item.y][item.x].seen:
             surface.fill(GREEN, (ox + item.x * s + 1, oy + item.y * s + 1, s - 2, s - 2))
+
+    import dungeon_features
+    for name, (kx, ky) in dungeon_features.keys_on_floor(map_info).items():
+        colour = dungeon_features.LOCK_COLOURS.get(name, WHITE)
+        pygame.draw.circle(surface, colour, (ox + kx * s + s // 2, oy + ky * s + s // 2), s // 2 + 1)
 
     for enemy in config.GAME_DATA.creature_data["enemy"]:
         if config.FOV[enemy.y][enemy.x] or getattr(config, 'DEV_OBSERVATION_MODE', False):

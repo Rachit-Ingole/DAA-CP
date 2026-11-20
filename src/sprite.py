@@ -325,3 +325,9 @@ class GameSprites:
 
             "select": self.select_tile,
         }
+
+        # Doors, shrines and rift entrances sit on normal floor; their
+        # overlays are drawn in code (draw_features.py)
+        self.tile_dict[DOOR] = self.tile_dict[PATH]
+        self.tile_dict[SHRINE] = self.tile_dict[FLOOR]
+        self.tile_dict[PORTAL] = self.tile_dict[FLOOR]

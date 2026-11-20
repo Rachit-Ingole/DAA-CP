@@ -1,7 +1,7 @@
 import config
 import random
 from collections import deque
-from constant import FLOOR, PATH, HAZARD, WALL, OBSTACLE
+from constant import FLOOR, PATH, HAZARD, WALL, OBSTACLE, DOOR
 import creature
 import entity
 import ai
@@ -33,18 +33,30 @@ def _occupied_tiles():
         for team in game_data.creature_data.values():
             taken.update((e.x, e.y) for e in team)
         taken.update((i.x, i.y) for i in game_data.item_data)
+    taken.update(_feature_tiles())
     return taken
 
 
-def walking_distances(start):
+def _feature_tiles():
+    """Keys and rift exits must stay clear of items and enemies."""
+    import dungeon_features
+    return dungeon_features.reserved_tiles()
+
+
+def walking_distances(start, through_doors=True):
     """
     BFS (8-way) over walkable tiles from start.
+
+    Args:
+        through_doors (bool): treat locked doors as walkable (False = only
+            what the player can reach right now)
 
     Returns:
         dict {(x, y): steps}
     """
     tiles = _tiles()
     h, w = len(tiles), len(tiles[0])
+    blocked = (WALL, OBSTACLE) if through_doors else (WALL, OBSTACLE, DOOR)
     dist = {start: 0}
     queue = deque([start])
     while queue:
@@ -53,7 +65,7 @@ def walking_distances(start):
             for dy in (-1, 0, 1):
                 n = (x + dx, y + dy)
                 if n not in dist and 0 <= n[0] < w and 0 <= n[1] < h \
-                        and tiles[n[1]][n[0]].type not in (WALL, OBSTACLE):
+                        and tiles[n[1]][n[0]].type not in blocked:
                     dist[n] = dist[(x, y)] + 1
                     queue.append(n)
     return dist
@@ -100,7 +112,7 @@ def generate_enemies(tree):
     enemy_list = []
     player_pos = (config.PLAYER.x, config.PLAYER.y)
     dist = walking_distances(player_pos)
-    taken = {player_pos}
+    taken = {player_pos} | _feature_tiles()
     rooms = [r for r in tree.root.child_room_list
              if not (r.coords[0] <= player_pos[0] <= r.coords[2] and r.coords[1] <= player_pos[1] <= r.coords[3])]
 
@@ -248,14 +260,17 @@ def safe_teleport_destination(min_enemy_dist=4):
     """
     taken = _occupied_tiles()
     enemies = [(e.x, e.y) for e in config.GAME_DATA.creature_data["enemy"]]
+    # Only tiles reachable right now: teleporting behind a locked door whose
+    # key is outside would trap the player
+    reachable = walking_distances((config.PLAYER.x, config.PLAYER.y), through_doors=False)
     candidates = []
     for room in config.MAP_INFO.map_tree.root.child_room_list:
-        for (x, y) in _free_tiles_in_room(room, taken):
+        for (x, y) in _free_tiles_in_room(room, taken, reachable, 0):
             if all(max(abs(x - ex), abs(y - ey)) >= min_enemy_dist for ex, ey in enemies):
                 candidates.append((x, y))
     if candidates:
         return random.choice(candidates)
-    return random_free_tile(taken=taken)
+    return random_free_tile(taken=taken, dist=reachable, min_dist=0)
 
 
 def generate_free_camera():
@@ -291,7 +306,7 @@ def generate_items(tree):
         item_list (List): list of all items generated
     """
     item_list = []
-    taken = {(config.PLAYER.x, config.PLAYER.y)}
+    taken = {(config.PLAYER.x, config.PLAYER.y)} | _feature_tiles()
     for child_room in tree.root.child_room_list:
         if random.randint(0, 100) < 75:
             spot = random_free_tile(child_room, taken)
@@ -460,7 +475,12 @@ def generate_vault(tree):
     if not candidates:
         return None, []
 
-    room = random.choice(candidates)
+    # Prefer a room that is locked away: the key becomes worth finding
+    import dungeon_features
+    plan = dungeon_features.lock_plan()
+    locked_away = [r for r in candidates if plan and any(
+        ((r.coords[0] + r.coords[2]) // 2, (r.coords[1] + r.coords[3]) // 2) in lk["behind"] for lk in plan.locks)]
+    room = random.choice(locked_away if locked_away and random.random() < 0.6 else candidates)
     taken = _occupied_tiles()
     spots = _free_tiles_in_room(room, taken)
     random.shuffle(spots)

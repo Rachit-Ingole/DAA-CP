@@ -6,6 +6,9 @@ Automated correctness and verification tests for CS3101 algorithms:
 - Procedural Dungeon Generation & Seed Reproducibility
 - 0/1 Knapsack Dynamic Programming vs Greedy
 - Backtracking Puzzle Solvability
+- Locked doors: Tarjan articulation points, vertex cuts, Kahn's topological sort
+- Negative weights: Bellman-Ford vs Floyd-Warshall / Dijkstra, negative cycles
+- Danger map: multi-source Dijkstra / BFS, safest route
 """
 
 import sys
@@ -318,6 +321,209 @@ class TestBacktrackingPuzzle(unittest.TestCase):
         # Verify sum matches target
         self.assertEqual(sum(puzzle.solution), puzzle.target_sum)
         self.assertGreater(puzzle.recursive_calls, 0)
+
+
+# ============================================================================
+# Locked doors & keys: Tarjan articulation points, vertex cuts, Kahn
+# ============================================================================
+import random as _random
+from algorithms import locks as lock_alg
+from algorithms import negative_weights as negw
+from algorithms import danger_map as dmap
+
+
+def _floors(count=12):
+    for seed in range(count):
+        yield generate_rooms_mst(35, 35, seed=seed)
+        yield generate_recursive_backtracking(35, 35, seed=seed)
+
+
+class TestLocksAndKeys(unittest.TestCase):
+    def test_articulation_point_dumbbell(self):
+        # Two rooms joined by a single corridor tile at (5, 2)
+        grid = [list("1111111111"),
+                list("1....1...1"),
+                list("1....0...1"),
+                list("1....1...1"),
+                list("1111111111")]
+        info = lock_alg.articulation_points(grid, (1, 1))
+        self.assertEqual(info.articulation_points, {(5, 2)})
+        self.assertEqual(info.behind((5, 2)), {(x, y) for x in range(6, 9) for y in range(1, 4)})
+
+    def test_behind_sets_match_bfs(self):
+        """Tarjan's subtree ranges give exactly the tiles a BFS can't reach with u blocked."""
+        for floor in list(_floors(4)):
+            grid = [list(r) for r in floor.grid]
+            info = lock_alg.articulation_points(grid, floor.spawn_pos)
+            everything = set(info.order)
+            for u in info.articulation_points:
+                expected = everything - lock_alg._reach(grid, floor.spawn_pos, {u}) - {u}
+                self.assertEqual(info.behind(u), expected)
+
+    def test_lock_plans_are_solvable(self):
+        """Ground-truth simulation agrees; Kahn's order respects every edge and replays."""
+        for floor in _floors():
+            grid = [list(r) for r in floor.grid]
+            rooms = [r.coords for r in floor.rooms]
+            plan = lock_alg.plan_locks(grid, floor.spawn_pos, floor.exit_pos,
+                                       _random.Random(floor.seed), 3, rooms=rooms)
+            self.assertTrue(plan.solvable)
+            exit_ok, all_open, _ = lock_alg.simulate_unlock(grid, floor.spawn_pos, plan.locks, floor.exit_pos)
+            self.assertTrue(exit_ok and all_open)
+            index = {n: i for i, n in enumerate(plan.order)}
+            for u, v in plan.edges:
+                self.assertLess(index[u], index[v])
+            valid, _ = lock_alg.replay_order(grid, floor.spawn_pos, floor.exit_pos, plan.locks, plan.order)
+            self.assertTrue(valid)
+            for lk in plan.locks:
+                self.assertNotIn(lk["key"], lk["behind"])      # a key is never behind its own door
+
+    def test_room_floors_get_exit_locks(self):
+        guarded = 0
+        for seed in range(20):
+            floor = generate_rooms_mst(35, 35, seed=seed)
+            grid = [list(r) for r in floor.grid]
+            plan = lock_alg.plan_locks(grid, floor.spawn_pos, floor.exit_pos, _random.Random(seed), 2,
+                                       rooms=[r.coords for r in floor.rooms])
+            self.assertGreater(len(plan.locks), 0)
+            guarded += any(lk["guards_exit"] for lk in plan.locks)
+        self.assertGreaterEqual(guarded, 12)
+
+    def test_kahn_detects_cycle(self):
+        order, cycle, _ = lock_alg.topological_sort(["A", "B", "C", "D"],
+                                                    [("D", "A"), ("A", "B"), ("B", "C"), ("C", "A")])
+        self.assertEqual(order, ["D"])
+        self.assertEqual(sorted(cycle), ["A", "B", "C"])
+
+
+# ============================================================================
+# Negative weights: Bellman-Ford, negative cycles, Dijkstra's failure
+# ============================================================================
+class _TinyGraph:
+    """Minimal graph with the interface bellman_ford / dijkstra_textbook use."""
+    def __init__(self, n, edges):
+        self.pos = list(range(n))
+        self.edges = edges
+        self.adj = [[] for _ in range(n)]
+        for u, v, w in edges:
+            self.adj[u].append((v, w))
+
+    @property
+    def n(self):
+        return len(self.pos)
+
+    def weight(self, u, v):
+        return min(w for x, w in self.adj[u] if x == v)
+
+
+def _floyd_warshall(graph):
+    n = graph.n
+    d = [[negw.INF] * n for _ in range(n)]
+    for i in range(n):
+        d[i][i] = 0
+    for u, v, w in graph.edges:
+        d[u][v] = min(d[u][v], w)
+    for k in range(n):
+        for i in range(n):
+            for j in range(n):
+                if d[i][k] + d[k][j] < d[i][j]:
+                    d[i][j] = d[i][k] + d[k][j]
+    return d
+
+
+class TestNegativeWeights(unittest.TestCase):
+    def test_dijkstra_wrong_bellman_ford_right(self):
+        # 0->1 (1), 1->3 (1), 0->2 (3), 2->1 (-3): true dist(1) = 0, dist(3) = 1
+        g = _TinyGraph(4, [(0, 1, 1), (1, 3, 1), (0, 2, 3), (2, 1, -3)])
+        bf = negw.bellman_ford(g, 0)
+        dj, _, _ = negw.dijkstra_textbook(g, 0)
+        self.assertEqual(bf.dist, [0, 0, 3, 1])
+        self.assertEqual(dj[1], 1)          # settled too early
+        self.assertEqual(dj[3], 2)
+        self.assertIsNone(bf.negative_cycle)
+
+    def test_negative_cycle_detected(self):
+        g = _TinyGraph(3, [(0, 1, 2), (1, 2, 1), (2, 1, -3)])
+        res = negw.bellman_ford(g, 0)
+        self.assertIsNotNone(res.negative_cycle)
+        self.assertEqual(sorted(res.negative_cycle), [1, 2])
+        self.assertLess(negw.cycle_weight(g, res.negative_cycle), 0)
+
+    def test_bellman_ford_matches_floyd_warshall_on_turn_graph(self):
+        grid = [list("1111111111"),
+                list("1........1"),
+                list("1.11111..1"),
+                list("1..M.....1"),
+                list("1111111111")]
+        shrines = [(5, 3)]
+        rifts = [{"src": (8, 1), "dst": (1, 3), "turns": 4, "sealed": False}]
+        g = negw.TurnGraph(grid, shrines, rifts)
+        fw = _floyd_warshall(g)
+        for s in range(g.n):
+            bf = negw.bellman_ford(g, s)
+            self.assertIsNone(bf.negative_cycle)
+            self.assertEqual(bf.dist, fw[s])
+
+    def test_bellman_ford_equals_dijkstra_without_negative_edges(self):
+        floor = generate_rooms_mst(35, 35, seed=5)
+        g = negw.TurnGraph([list(r) for r in floor.grid])
+        src = g.index[floor.spawn_pos]
+        dj, _, _ = negw.dijkstra_textbook(g, src)
+        self.assertEqual(negw.bellman_ford(g, src).dist, dj)
+
+    def test_paradox_rifts_are_sealed(self):
+        """After sealing there is no negative cycle anywhere (virtual-source Bellman-Ford)."""
+        sealed_total = 0
+        for floor in _floors(10):
+            grid = [list(r) for r in floor.grid]
+            shrines, rifts = negw.place_shrines_and_rifts(grid, floor.spawn_pos, _random.Random(floor.seed))
+            reports = negw.seal_paradoxes(grid, shrines, rifts)
+            for rep in reports:
+                self.assertLess(rep["weight"], 0)
+                self.assertTrue(rep["rift"]["sealed"])
+            sealed_total += len(reports)
+            g = negw.TurnGraph(grid, shrines, rifts)
+            self.assertIsNone(negw.bellman_ford(g, None).negative_cycle)
+        self.assertGreater(sealed_total, 0)
+
+
+# ============================================================================
+# Danger map: multi-source Dijkstra / BFS
+# ============================================================================
+class TestDangerMap(unittest.TestCase):
+    def test_multi_source_equals_min_of_single_sources(self):
+        floor = generate_rooms_mst(35, 35, seed=7)
+        grid = floor.grid
+        rng = _random.Random(1)
+        walkable = [(x, y) for y in range(35) for x in range(35) if grid[y][x] not in ('1', 'O')]
+        sources = rng.sample(walkable, 6)
+        multi, _ = dmap.multi_source_dijkstra(grid, sources)
+        singles = [dmap.multi_source_dijkstra(grid, [s])[0] for s in sources]
+        for tile in walkable:
+            self.assertEqual(multi.get(tile, dmap.INF), min(d.get(tile, dmap.INF) for d in singles))
+        multi_bfs, _ = dmap.multi_source_bfs(grid, sources)
+        singles_bfs = [dmap.multi_source_bfs(grid, [s])[0] for s in sources]
+        for tile in walkable:
+            self.assertEqual(multi_bfs.get(tile, dmap.INF), min(d.get(tile, dmap.INF) for d in singles_bfs))
+
+    def test_safest_route_is_valid_and_keeps_distance(self):
+        floor = generate_rooms_mst(35, 35, seed=11)
+        grid = floor.grid
+        start, goal = floor.spawn_pos, floor.exit_pos
+        danger = dmap.build_danger_map(grid, [(goal[0] - 3, goal[1])] if grid[goal[1]][goal[0] - 3] != '1' else [goal])
+        safe, cost, turns = dmap.safest_route(grid, start, goal, danger)
+        short, _, short_turns = dmap.safest_route(grid, start, goal, danger, weight=0)
+        self.assertEqual(safe[-1], goal)
+        prev = start
+        for step in safe:
+            self.assertLessEqual(max(abs(step[0] - prev[0]), abs(step[1] - prev[1])), 1)
+            self.assertNotIn(grid[step[1]][step[0]], ('1', 'O'))
+            prev = step
+        self.assertGreaterEqual(turns, short_turns)
+        # turns_safe + pen_safe <= turns_short + pen_short and turns_safe >= turns_short
+        # => the safe route never collects more danger penalty than the shortest one
+        penalty = lambda path: sum(dmap.danger_penalty(danger.get(p)) for p in path)
+        self.assertLessEqual(penalty(safe), penalty(short))
 
 
 if __name__ == '__main__':

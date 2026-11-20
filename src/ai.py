@@ -13,7 +13,7 @@ def _is_walkable(x, y):
     tiles = config.MAP_INFO.tile_array
     if not (0 <= y < len(tiles) and 0 <= x < len(tiles[0])):
         return False
-    return tiles[y][x].type not in (WALL, OBSTACLE)
+    return tiles[y][x].type not in (WALL, OBSTACLE, DOOR)
 
 
 def _creature_at(x, y, ignore=None):

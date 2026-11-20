@@ -53,6 +53,9 @@ DOWNSTAIR = '>'
 UPSTAIR = '<'
 HAZARD = 'M'    # Difficult terrain / mud hazard (cost = 3.0)
 OBSTACLE = 'O'  # Low obstacle pillar / boulder (blocks movement, transparent to light)
+DOOR = 'D'      # Locked door (blocks movement until its key is found; see dungeon_features.py)
+SHRINE = 'S'    # Healing shrine (heals + free turns: a negative edge weight)
+PORTAL = 'P'    # Time rift entrance (one-way teleport + free turns: a negative edge weight)
 
 # Colours
 GREY = (128, 128, 128)

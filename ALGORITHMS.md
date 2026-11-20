@@ -17,6 +17,9 @@ This document gives the formulation, correctness argument, time/space complexity
 | 3 | Shortest paths / search | **BFS, Dijkstra, A\*, Greedy Best-First** over a terrain-weighted grid graph | Each enemy type hunts with a different one; click-to-move uses Dijkstra |
 | 4 | Dynamic programming | **0/1 Knapsack** (DP with reconstruction) vs greedy ratio heuristic | Carry capacity, treasure vaults, the `K` loot planner |
 | 5 | Constraint satisfaction | Backtracking with forward pruning | Runic vault puzzle (`U`) |
+| 6 | Graph structure & ordering | **Tarjan's articulation points**, vertex cuts, **Kahn's topological sort** | Locked doors and keys on every floor |
+| 7 | Negative edge weights | **Bellman–Ford** with early exit and **negative-cycle detection**; textbook Dijkstra for comparison | Healing shrines, time rifts, right-click route planner |
+| 8 | Multi-source shortest paths | **Multi-source Dijkstra / BFS** (virtual super-source); Dijkstra with a danger penalty | Danger map (`N`), safest route (Shift + click) |
 
 ### 1.1 Module Index
 
@@ -32,6 +35,11 @@ This document gives the formulation, correctness argument, time/space complexity
 | [`src/relics.py`](src/relics.py) | Vault relic types, random weight/value generation |
 | [`src/generation_replay.py`](src/generation_replay.py) | Plays back a generation trace |
 | [`src/algorithms/backtracking_puzzle.py`](src/algorithms/backtracking_puzzle.py) | Rune vault CSP solver |
+| [`src/algorithms/locks.py`](src/algorithms/locks.py) | Iterative Tarjan articulation points, room-seal vertex cuts, lock/key placement, Kahn's algorithm, unlock replay and simulation |
+| [`src/algorithms/negative_weights.py`](src/algorithms/negative_weights.py) | Turn-cost graph with shrine / rift edges, Bellman–Ford, textbook Dijkstra, shrine / rift placement, paradox sealing |
+| [`src/algorithms/danger_map.py`](src/algorithms/danger_map.py) | Multi-source Dijkstra and BFS, danger map, safest-route Dijkstra |
+| [`src/dungeon_features.py`](src/dungeon_features.py) | Puts locks, shrines and rifts on each floor; door / key / shrine / rift effects; the two route planners |
+| [`src/draw_features.py`](src/draw_features.py) | Draws doors, keys, shrines, rifts, the danger map, planned routes and the lock-graph panel |
 
 ---
 
@@ -216,3 +224,103 @@ def backtrack(assignment):
   - prune if $k \ge 2$ and $dial[k-1] = dial[k-2]$.
 - **Worst case** $O(M^N)$ without pruning; the bounds cut whole subtrees, and the solver reports how many recursive calls and backtracks it needed.
 - **Guaranteed solvability**: the generator first picks a valid random assignment $A^*$, sets $T = \sum A^*$, and runs the solver to confirm a solution exists before showing the puzzle.
+
+---
+
+## 7. Locked Doors & Keys: Cut Vertices, Vertex Cuts and Topological Sort
+
+**Module**: [`src/algorithms/locks.py`](src/algorithms/locks.py) (pure); in game via [`src/dungeon_features.py`](src/dungeon_features.py).
+
+### 7.1 Problem
+Place $L \le 3$ locks (sets of door tiles opened by one key) and one key per lock on a floor so that (a) each lock really locks something away, (b) a key is never behind its own lock, and (c) there is an order in which all locks can be opened and the exit reached.
+
+### 7.2 Where a Lock Can Go: Tarjan's Articulation Points
+The floor is an undirected 8-connected graph of walkable tiles. A DFS from the spawn records, for every tile $v$:
+- $tin(v)$: discovery time;
+- $low(v) = \min\big(tin(v),\ \min_{(v,w)\text{ back edge}} tin(w),\ \min_{c \text{ child}} low(c)\big)$.
+
+A non-root $u$ is an **articulation point** iff it has a DFS child $c$ with $low(c) \ge tin(u)$: nothing in $c$'s subtree has an edge to a proper ancestor of $u$, so removing $u$ separates the subtree from the spawn. The region a door on $u$ cuts off is the union of those children's subtrees, which are contiguous ranges $[tin(c), tout(c)]$ of the DFS order, so it costs nothing extra to compute.
+
+- Time $O(V + E)$, space $O(V)$. The DFS is iterative (explicit stack of neighbour iterators): maze floors reach depth ≈ 700.
+- Candidate doorway locks: cut vertices that are 1-wide corridor tiles (walls on two opposite sides), at least 4 tiles from the spawn, cutting off at least 8 tiles.
+
+### 7.3 Vertex Cuts: Room Seals
+Room-and-corridor floors have few cut vertices (≈ 2.5 per floor: corridors are mostly 2 wide, and 20 % of edges are loops). The lock model is therefore a **vertex cut**: any set $C$ whose removal disconnects part of the floor. For a room rectangle, its walkable 1-tile ring is a cut (every path into the room crosses it); rooms with at most 4 entrance tiles, all plain floor, are candidate **room seals**. The region behind a lock is $R(C) = V \setminus reach(spawn, G - C) \setminus C$, one BFS per candidate.
+
+### 7.4 Key Placement (DAG by Construction)
+1. Prefer one candidate whose region contains the exit (closest to splitting the floor in half), then add others ≥ 3 tiles apart.
+2. Repeatedly take a remaining lock whose door is reachable with all remaining locks closed; put its key on a reachable tile under exactly those conditions, preferably inside the previous lock's region (this chains locks). Locks are processed in a valid unlock order by construction.
+
+### 7.5 Dependency Graph and Kahn's Algorithm
+Nodes: the locks and **Exit**. Edge $d \to i$ if, with only $d$ and $i$ closed, $i$'s key is unreachable or none of $i$'s door tiles can be approached; edge $d \to \text{Exit}$ if closing $d$ alone cuts off the stairs.
+
+```
+indeg[n] for every node; queue = [n with indeg 0]
+while queue: n = pop(); order += n; for m in out[n]: if --indeg[m] == 0: push(m)
+cycle = nodes not in order          # non-empty  <=>  deadlock
+```
+$O(V_D + E_D)$ on the dependency graph ($\le 4$ nodes); building the edges costs one BFS per pair of locks, $O(L^2 (V + E))$.
+
+**Exactness and the replay check.** The edges are *necessary* conditions computed with one lock closed. With several closed, a region may be reachable through either of two doors (an OR) that no single edge captures. The planner therefore replays Kahn's order step by step (each key and door must be reachable with only the earlier locks open) and drops the last lock if it fails. Over 100 benchmark floors the replay never failed, and the unit tests compare every plan with an independent flood-fill simulation (collect reachable keys, open reachable doors, repeat).
+
+**Stages.** The replay also records, for every tile, how many locks must be open to reach it. Rift entrances and exits must share a stage (§8.4), so a rift can never bypass a door, and the teleport scroll only targets tiles reachable right now.
+
+---
+
+## 8. Negative Edge Weights: Shrines, Time Rifts and Bellman–Ford
+
+**Module**: [`src/algorithms/negative_weights.py`](src/algorithms/negative_weights.py).
+
+### 8.1 Turn Cost Model
+Entering a tile costs turns: 1 for floor, 3 for mud (diagonal steps also cost 1 turn here). While the player holds **free turns**, enemies skip their turns, and free turns pay for the player's moves first (including mud).
+- **Healing shrine** (single use): heals ⅓ HP and grants 2 free turns, so the edge into it weighs $1 - 2 = -1$.
+- **Time rift** $A \to B$ (one-way): stepping onto $A$ places you on $B$ and grants $R \in [3, 7]$ free turns. In the graph $A$ is not a node; every neighbour $u$ of $A$ has an edge $u \to B$ of weight $1 - R$.
+
+### 8.2 Why Dijkstra Fails
+Dijkstra finalises a vertex when it is popped, which relies on $w \ge 0$: no path discovered later can be cheaper. With $s \to a$ (1), $a \to t$ (1), $s \to b$ (3), $b \to a$ (−3), Dijkstra settles $a$ at 1 and $t$ at 2; the truth is 0 and 1. This exact graph is a unit test. In game, from the spawn, textbook Dijkstra returns at least one wrong distance on 18 % of room floors and 48 % of maze floors (BENCHMARKS §6).
+
+### 8.3 Bellman–Ford
+```
+dist[s] = 0 (or 0 for every node: virtual source)
+for pass in 1 .. V:
+    changed = False
+    for (u, v, w) in E:
+        if dist[u] + w < dist[v]: dist[v] = dist[u] + w; parent[v] = u; changed = True
+    if not changed: break                          # converged early
+    if parent pointers contain a cycle: return it  # negative cycle
+```
+- **Correctness**: after pass $k$, every shortest path with at most $k$ edges is exact; simple paths have at most $V - 1$ edges.
+- **Early exit**: stop on a pass with no change: 13.6 passes on room floors and 26.7 on mazes, against $V - 1 \approx 342 / 691$.
+- **Early cycle detection**: if no negative cycle is reachable from $s$, the predecessor subgraph is always a tree rooted at $s$ (CLRS Lemma 24.16). A cycle among the parent pointers is therefore a negative cycle; the check is $O(V)$ per pass and fires long before pass $V$.
+- **Complexity**: $O(V \cdot E)$ worst case, $O(k \cdot E)$ for $k$ passes.
+
+### 8.4 Negative Cycles and Sealing Rifts
+A rift whose exit is $k$ steps from its entrance closes a cycle of weight $k + 1 - R$: negative when $k < R - 1$ (walk back, jump again, gain turns forever). At generation:
+1. Shrines are placed at least 3 tiles apart. Any cycle then follows each −1 edge with a ≥ +1 edge, so shrine-only cycles have weight ≥ 0.
+2. Rifts get random exits 3–16 steps away, inside the same lock stage (§7.5).
+3. Bellman–Ford from a virtual source (every `dist = 0`) finds any negative cycle; the rift edge on it with the largest $R$ is **sealed**; repeat until none remain.
+
+36 of 300 benchmark rifts were sealed (12 %).
+
+### 8.5 The Right-Click Planner
+On the current graph (active shrines only), it runs Bellman–Ford from the player and textbook Dijkstra on the same graph. It walks the Bellman–Ford path, expanding a rift jump $u \to B$ into the steps $u \to A$ then $B$. The message and the F1 overlay report Dijkstra's answer and every tile it gets wrong. Re-planning on each click keeps the plan exact although shrines change state when used.
+
+---
+
+## 9. Multi-Source Shortest Paths: The Danger Map
+
+**Module**: [`src/algorithms/danger_map.py`](src/algorithms/danger_map.py).
+
+### 9.1 Definition
+$danger(v) = \min_{e \in \text{enemies}} turns(e, v)$, the number of turns until the nearest enemy could stand on $v$. Walking enemies pay 3 turns for mud; flying enemies don't. Locked doors block everyone.
+
+### 9.2 Multi-Source Dijkstra / BFS
+Add a virtual super-source $s^*$ with a 0-weight edge to every enemy. Then $dist(s^*, v) = \min_e dist(e, v)$, and starting Dijkstra from $s^*$ is the same as seeding the priority queue with every enemy at distance 0.
+- Walkers: multi-source Dijkstra (weights 1 / 3), $O((V + E)\log V)$.
+- Flyers: multi-source BFS (unit weights), $O(V + E)$.
+- $danger = \min$ of the two maps.
+
+One search replaces $k$; benchmark: 3.9×, 8.5× and 15.7× faster for 4, 8 and 16 enemies, identical answers. In game the map is cached until an enemy moves.
+
+### 9.3 Safest Route
+Dijkstra with $c(v) = turns(v) + 3 \cdot \max(0,\ 4 - danger(v))$. All weights are ≥ 0, so Dijkstra is exact. If $P_s$ is the safest and $P_t$ the fewest-turns path, then $T(P_s) + D(P_s) \le T(P_t) + D(P_t)$ and $T(P_s) \ge T(P_t)$, hence $D(P_s) \le D(P_t)$: the safe route never collects more danger penalty (unit-tested).

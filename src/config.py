@@ -41,6 +41,11 @@ ACTIVE_PATHFINDING_ALGO = "Per-type"
 PATH_STATS = {}
 LAST_PATHFINDING_RESULT = None
 
+# Danger map overlay (N key) and the route currently being walked by a planner
+# (right click = Bellman-Ford rift route, shift + left click = safest route)
+SHOW_DANGER_MAP = False
+ROUTE_PLAN = None
+
 # Knapsack optimization capacity
 KNAPSACK_CAPACITY = 20
 

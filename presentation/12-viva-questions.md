@@ -1,4 +1,4 @@
-# 9. Likely Questions and Short Answers
+# 12. Likely Questions and Short Answers
 
 ## Generation
 
@@ -62,10 +62,49 @@ If the total fits, there is no decision to make. Our first version did exactly t
 **What makes it backtracking rather than brute force?**  
 It checks constraints on partial assignments and abandons a branch as soon as it can't lead to a solution (sum bounds, adjacent duplicates), instead of generating all $M^N$ complete assignments.
 
+## Locked Doors
+
+**What is an articulation point and how do you find them?**
+A vertex whose removal disconnects the graph. Tarjan's DFS records the discovery time $tin(v)$ and $low(v)$, the smallest discovery time reachable from $v$'s subtree with one back edge. A non-root $u$ is a cut vertex iff some child $v$ has $low(v) \ge tin(u)$ — the subtree can't get around $u$. One DFS, $O(V + E)$.
+
+**Why not put every door on an articulation point?**
+Room floors have 2-wide corridors and loops, so they have very few (≈ 2.5 per floor). A lock is therefore a set of tiles — a vertex cut — and the walkable ring around a room is always one. That raised locks on room floors to 2.9 per floor with the exit locked 86 % of the time.
+
+**What does the topological sort prove?**
+Nodes are locks plus the exit; an edge $d \to i$ means $i$'s key or door is unreachable while $d$ is closed. Kahn's algorithm outputs every node iff the graph is acyclic, and that output is a valid unlock order. A cycle would mean a deadlock (e.g. two keys each behind the other's door).
+
+**Are the dependency edges exact?**
+They are necessary conditions, computed with one lock closed at a time. With two locks closed a region can be reachable through either door (an OR), which edges can't express — so we replay Kahn's order step by step as well, and the tests compare against a flood-fill simulation. The replay never failed in 100 benchmark floors.
+
+## Negative Weights
+
+**Why can't you use Dijkstra with negative weights?**
+Dijkstra finalises a node when it is popped, assuming any later path is at least as long. A negative edge discovered later can make an already-settled node cheaper. Example from our tests: $s \to a$ 1, $s \to b$ 3, $b \to a$ −3 — Dijkstra settles $a$ at 1, the truth is 0.
+
+**What does Bellman–Ford cost and why is it correct?**
+$O(V \cdot E)$. After pass $k$ every shortest path that uses at most $k$ edges is correct; a simple path has at most $V - 1$ edges. We stop early when a pass changes nothing (≈ 14–27 passes in practice).
+
+**How do you detect a negative cycle?**
+If a pass still improves something after $V - 1$ passes there is one. We detect it earlier: if the parent pointers ever form a cycle, that cycle has negative weight (CLRS Lemma 24.16). To find cycles anywhere, not only those reachable from one start, all distances start at 0 — a virtual source with 0-weight edges to every node.
+
+**Why do shrines never create a negative cycle?**
+Entering a shrine is −1, entering any other tile is ≥ +1, and shrines are at least 3 tiles apart, so on any cycle each −1 is followed by a +1: weight ≥ 0. Rifts are different: walk-back cost $k$ plus jump $1 - R$ is negative when $k < R - 1$, so those are sealed.
+
+**Why not Johnson's algorithm?**
+Johnson's reweights once with Bellman–Ford so that Dijkstra can run from every vertex — it pays off for all-pairs shortest paths. The planner needs one source per click.
+
+## Danger Map
+
+**What is a multi-source shortest path?**
+Shortest distance from the *nearest* of several sources. Add a super-source with 0-weight edges to every source and run one Dijkstra; equivalently, start with every source in the queue at distance 0. Cost $O((V + E) \log V)$ regardless of the number of sources — 15.7× faster than 16 separate searches.
+
+**Why is the safest route still solvable with Dijkstra?**
+Its weights are turns plus a non-negative danger penalty, so every weight is ≥ 0. Contrast with the rift planner, which needs Bellman–Ford.
+
 ## General
 
 **How did you test correctness?**  
-21 unit tests (search optimality vs Dijkstra, admissibility over all point pairs, Greedy's sub-optimality, generator connectivity and reproducibility, Kruskal producing $|V|-1$ edges in sorted order, knapsack against known answers), plus 3,532 benchmark records and in-game audits of entity placement.
+33 unit tests (search optimality vs Dijkstra, admissibility over all point pairs, Greedy's sub-optimality, generator connectivity and reproducibility, Kruskal producing $|V|-1$ edges in sorted order, knapsack against known answers, Tarjan's cut regions against brute-force BFS, lock plans against a flood-fill simulation, Bellman–Ford against Floyd–Warshall, multi-source search against k single searches), plus 3,822 benchmark records and in-game audits of entity placement.
 
 **What would you add next?**  
-A shared distance map (one multi-source BFS per turn for all enemies instead of one search each), Held-Karp DP for "collect every item" routes, speed-based turns with a priority queue, and locked doors whose keys are placed with a dependency graph / topological sort.
+Driving all enemies from one distance map computed from the player (one search per turn instead of one per enemy — the danger map already has the machinery), Held-Karp DP for "collect every item" routes, and speed-based turns with a priority queue.

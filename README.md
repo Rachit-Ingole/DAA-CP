@@ -35,8 +35,11 @@
    - One **treasure vault** per floor holds ~1.7× more relic weight than you can carry.
    - `K` opens the **loot planner**: DP vs Greedy on your bag + nearby loot, the DP table `dp[i][w]` drawn as a heat map with the reconstruction path, and one key to apply either plan. Relics are banked as gold when you descend.
 6. **Constraint-Satisfaction Backtracking**: Ancient Runic Vault puzzle solved by recursive backtracking with forward pruning (`U`).
-7. **Algorithm Observation Mode** (`F1`): generation stats, seed, spawn→exit distance, per-algorithm pathfinding stats, explored-node overlay and per-enemy paths.
-8. **Infinite floor progression** with depth-scaled enemies and richer vaults.
+7. **Locked doors & keys** — every floor has 1–3 locks. Doors go on **cut vertices** found by **Tarjan's articulation-point DFS**, or seal a room with a **vertex cut**; keys are placed so the lock dependencies form a DAG, and **Kahn's topological sort** proves an unlock order exists (shown live in F1). On room floors the exit is locked 86 % of the time.
+8. **Negative edge weights** — **healing shrines** (heal + 2 free turns, edge weight −1) and one-way **time rifts** (rewind R turns, weight 1 − R). Right-click plans the fewest-turns route with **Bellman–Ford** and shows where textbook Dijkstra would be wrong; at generation Bellman–Ford finds rifts that form a **negative cycle** (infinite free turns) and seals them.
+9. **Danger map** (`N`) — one **multi-source Dijkstra** (walkers, mud = 3) plus **multi-source BFS** (flyers) gives the turns until the nearest enemy can reach every tile, 15.7× faster than one search per enemy with 16 enemies. Shift + click walks the **safest route** (Dijkstra with a danger penalty).
+10. **Algorithm Observation Mode** (`F1`): generation stats, seed, spawn→exit distance, per-algorithm pathfinding stats, explored-node overlay and per-enemy paths, the lock graph, key → door links and rift edge weights.
+11. **Infinite floor progression** with depth-scaled enemies, more locks and richer vaults.
 
 ---
 
@@ -48,6 +51,10 @@
 | **q / e / z / c** | Walk diagonally |
 | **x** | Wait a turn |
 | **Left click** | Walk to the clicked tile (Dijkstra route, avoids mud) |
+| **Right click** | **Fewest-turns route using shrines and rifts** (Bellman–Ford; compares with Dijkstra) |
+| **Shift + left click** | **Safest route** (Dijkstra with a danger penalty) |
+| *walk into a door* | Open it if you hold its key (keys are picked up by walking over them) |
+| **n** | **Danger map**: turns until the nearest enemy can reach each tile (multi-source Dijkstra) |
 | *walk onto an item* | Pick it up automatically (skipped if it would make you over-encumbered) |
 | **t** | Pick up items here, even if too heavy |
 | **h / j / r** | Quick use: health potion / mana potion / teleport scroll |
@@ -84,7 +91,7 @@ python src/main.py
 ```
 
 ### 3.3 Running the Unit Tests
-21 tests: BFS/DFS reachability, Dijkstra & A\* optimality, heuristic admissibility, Greedy Best-First validity and sub-optimality, dungeon connectivity, seed reproducibility, double-sweep exit placement, Kruskal trace (|V| − 1 edges, sorted order), trace-does-not-change-output, knapsack DP / greedy / reconstruction, backtracking puzzle.
+33 tests: BFS/DFS reachability, Dijkstra & A\* optimality, heuristic admissibility, Greedy Best-First validity and sub-optimality, dungeon connectivity, seed reproducibility, double-sweep exit placement, Kruskal trace (|V| − 1 edges, sorted order), trace-does-not-change-output, knapsack DP / greedy / reconstruction, backtracking puzzle, Tarjan cut regions vs brute-force BFS, lock plans vs a flood-fill simulation, Kahn cycle detection, Bellman–Ford vs Floyd–Warshall, Dijkstra failing on a negative edge, negative-cycle detection and rift sealing, multi-source vs k single-source searches, safe-route guarantee.
 ```bash
 python -m unittest tests/test_algorithms.py
 ```
@@ -95,8 +102,12 @@ Headless, writes every record to `benchmark_results.csv`:
 2. Enemy chase queries (600 in-game style searches, 4–12 steps)
 3. Recursive Backtracking vs Rooms + MST generation
 4. Knapsack DP vs Greedy on random instances and on 1,000 realistic treasure vaults
+5. Locked doors: Tarjan + vertex cuts + Kahn on 100 floors
+6. Bellman–Ford vs textbook Dijkstra with shrines and rifts, negative-cycle sealing
+7. Danger map: one multi-source search vs k single-source searches
 ```bash
 python benchmark_runner.py
+python benchmark_runner.py --only locks,negative,danger   # just sections 5-7, updates only their CSV rows
 ```
 
 ---

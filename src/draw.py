@@ -5,6 +5,7 @@ import game_text
 import minimap
 import fov
 import sprite
+import draw_features
 import item as item_module
 
 # ============================================================================
@@ -89,6 +90,10 @@ def _theme_tiles(theme_tint):
         DOWNSTAIR: _tinted(sp.downstair, theme_tint),
         HAZARD: _tinted(sp.hazard_image, theme_tint),
         OBSTACLE: _build_obstacle(floor_1, wall),
+        # Overlays for these are drawn by draw_features.py
+        DOOR: floor_2,
+        SHRINE: floor_1,
+        PORTAL: floor_1,
     }
 
     tiles = {}
@@ -202,6 +207,9 @@ def draw_game():
 
     draw_grid()
 
+    # Doors, shrines, rifts, keys, danger map, planned routes
+    draw_features.draw_world_layer()
+
     if getattr(config, 'DEV_OBSERVATION_MODE', False):
         draw_algorithm_grid_overlay()
 
@@ -213,6 +221,8 @@ def draw_game():
     draw_particles()
 
     _draw_level_fade()
+
+    draw_features.draw_screen_layer()
 
     config.BUTTON_PANEL.draw_buttons(config.SURFACE_MAIN)
 
@@ -347,6 +357,7 @@ def draw_map(map_info):
         world = pygame.Surface((map_info.pixel_width, map_info.pixel_height))
         world.fill(BLACK)
         draw_tiles(map_info.tile_array, world, (0, 0))
+        draw_features.draw_tile_overlays(world, (0, 0), full=True)
         for item in config.GAME_DATA.item_data:
             if map_info.tile_array[item.y][item.x].seen:
                 world.blit(item.image, (item.x * SPRITE_SIZE, item.y * SPRITE_SIZE))
@@ -562,6 +573,7 @@ def draw_mouse():
     cam = config.CAMERA
     tile_x, tile_y = cam.get_mouse_coord()
     sx, sy = cam.world_to_screen(tile_x, tile_y)
+    draw_features.draw_hover_region(tile_x, tile_y)
     config.SURFACE_MAIN.blit(_get_surface("hover"), (sx, sy))
     config.SURFACE_MAIN.blit(config.SPRITE.entity_dict["camera"], (sx, sy))
     _draw_hover_label(tile_x, tile_y, sx, sy)
@@ -591,6 +603,9 @@ def _hover_label_text(tile_x, tile_y):
             return "Stairs up  [1]", (255, 220, 120)
         if tile.type == HAZARD:
             return "Mud  (move cost x3)", (205, 165, 120)
+        label = draw_features.hover_label(tile_x, tile_y)
+        if label:
+            return label
     return None
 
 
@@ -786,7 +801,10 @@ def draw_algorithm_telemetry():
         else:
             text = f"{algo} ({who}):  not hunting yet"
         lines.append((text, ALGORITHM_COLOURS[algo], small))
-    lines.append(("[F1] HUD  [O] Path  [G] Gen  [B] Gen Replay  [K] Loot Plan  [U] Runes", YELLOW, font))
+    for text, colour in draw_features.hud_lines():
+        lines.append((text, colour, small))
+    lines.append(("[F1] HUD  [O] Path  [G] Gen  [B] Replay  [K] Loot  [U] Runes  [N] Danger", YELLOW, font))
+    lines.append(("Right click: Bellman-Ford route    Shift + click: safest route", YELLOW, small))
     rendered = [(game_text.render_cached(f, text, True, color), f) for text, color, f in lines]
 
     panel_w = max(r.get_width() for r, _ in rendered) + 24
@@ -807,6 +825,9 @@ def draw_algorithm_telemetry():
     for r, f in rendered:
         config.SURFACE_MAIN.blit(r, (panel_x + 12, line_y))
         line_y += f.get_linesize() + 3
+
+    # Lock dependency graph (left column)
+    draw_features.draw_lock_graph()
 
 
 # ============================================================================
@@ -843,6 +864,8 @@ def draw_entity(entity, shadow=True):
     image = entity.image
     if entity.is_hit_flashing():
         image = _flash_image(image)
+    elif entity.ai and draw_features.time_frozen():
+        image = draw_features.frozen_image(image)
     config.SURFACE_MAIN.blit(image, (sx, sy))
 
 
